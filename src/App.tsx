@@ -45,6 +45,17 @@ function normalizeProductCode(input: string) {
     .replace(/\.(png|jpg|jpeg|webp)$/i, "");
 }
 
+function reasonLabel(value: string | null | undefined) {
+  const found = REASONS.find((r) => r.value === value);
+  return found?.label ?? (value ?? "—");
+}
+
+function isValidProductCodeFormat(code: string) {
+  // 4 dash-separated segments, 1–6 alphanumeric each
+  // ex: RB-10-02-16
+  return /^[A-Za-z0-9]{1,6}(-[A-Za-z0-9]{1,6}){3}$/.test(code);
+}
+
 export default function App() {
   const [sessionChecked, setSessionChecked] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -66,11 +77,31 @@ export default function App() {
     null
   );
 
+  // flag state for Scan mode
+  const [autoStartMode, setAutoStartMode] = useState<"scan" | "inventory" | null>(null);
+
+  // handles Scan mode scan after render
+  useEffect(() => {
+    if (!autoStartMode) return;
+    if (mode !== autoStartMode) return;
+
+    // Wait until the DOM has painted so #qr-reader exists
+    const id = requestAnimationFrame(() => {
+      startScan(autoStartMode);
+      setAutoStartMode(null);
+    });
+
+    return () => cancelAnimationFrame(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoStartMode, mode]);
+
+
   // Inventory mode state
   const [invProductCode, setInvProductCode] = useState<string | null>(null);
   const [invOnHand, setInvOnHand] = useState<number | null>(null);
   const [invLoading, setInvLoading] = useState(false);
   const [invAdjustments, setInvAdjustments] = useState<Adjustment[]>([]);
+  const [invEntry, setInvEntry] = useState<"scan" | "search">("search");
 
 
 
@@ -79,6 +110,58 @@ export default function App() {
   const [invNote, setInvNote] = useState<string>("");
   const [invSuccess, setInvSuccess] = useState<string | null>(null);
   const [invImageUrl, setInvImageUrl] = useState<string | null>(null);
+
+  const [invSearchCode, setInvSearchCode] = useState("");
+  const [invSearchError, setInvSearchError] = useState<string | null>(null);
+  const [invSearchBusy, setInvSearchBusy] = useState(false);
+
+  // Handle inventory search
+  const handleInventorySearch = async () => {
+      setInvSearchError(null);
+      setInvSuccess(null);
+
+      const raw = invSearchCode.trim();
+      if (!raw) {
+        setInvSearchError('Please enter a product code (e.g. "RB-10-02-16").');
+        return;
+      }
+
+      const productCode = normalizeProductCode(raw);
+
+      if (!isValidProductCodeFormat(productCode)) {
+        setInvSearchError(
+          'Invalid format. Use "color-shape-pattern-size" like RB-10-02-16.'
+        );
+        return;
+      }
+
+      setInvSearchBusy(true);
+      try {
+        // Quick existence check for clean feedback (optional but nice)
+        const { data, error } = await supabase
+          .from(TABLE)
+          .select("product_code")
+          .eq("product_code", productCode)
+          .maybeSingle();
+
+        if (error) {
+          setInvSearchError(`Search failed: ${error.message}`);
+          return;
+        }
+
+        if (!data) {
+          setInvSearchError(`No product found for: ${productCode} -- Product might exist but not registered.`);
+          return;
+        }
+
+        // Reuse the exact same flow as QR scan (loads on-hand, image, last 3, etc.)
+        await handleInventoryModeScan(productCode);
+      } finally {
+        setInvSearchBusy(false);
+      }
+    };
+
+
 
   // Online offline 
   const [isOnline, setIsOnline] = useState<boolean>(() => navigator.onLine);
@@ -171,6 +254,12 @@ export default function App() {
     setInvImageUrl(null);
 
     setInvAdjustments([]);
+
+    setInvSearchCode("");
+    setInvSearchError(null);
+    setInvSearchBusy(false);
+    setInvEntry("search");
+
   };
 
   // ---------- Scanning ----------
@@ -186,11 +275,23 @@ export default function App() {
       setIsScanning(false);
     }
   };
+  // Clearing Scanner
+  const hardClearScannerUI = () => {
+  const el = document.getElementById(regionId);
+    if (el) el.innerHTML = ""; // removes any leftover video/canvas overlay
+  };
 
-  const startScan = async () => {
+
+  const startScan = async (targetMode: "scan" | "inventory") => {
     setScanError(null);
     setInvSuccess(null);
     setIsScanning(true);
+    const el = document.getElementById(regionId);
+    if (!el) {
+      setScanError("Scanner UI not ready yet. Please try again.");
+      setIsScanning(false);
+      return;
+    }
 
     try {
       if (!qrRef.current) qrRef.current = new Html5Qrcode(regionId);
@@ -201,9 +302,9 @@ export default function App() {
         async (decodedText) => {
           const productCode = normalizeProductCode(decodedText);
 
-          if (mode === "scan") {
+          if (targetMode === "scan") {
             await handleScanMode(productCode);
-          } else if (mode === "inventory") {
+          } else {
             await handleInventoryModeScan(productCode);
           }
 
@@ -252,6 +353,8 @@ export default function App() {
   };
 
   const handleInventoryModeScan = async (productCode: string) => {
+    setInvSearchError(null);
+    setInvSearchCode(productCode);
     setInvProductCode(productCode);
     setInvDelta(0);
     setInvSuccess(null);
@@ -491,6 +594,7 @@ export default function App() {
               onClick={() => {
                 resetAllWorkflows();
                 setMode("scan");
+                setAutoStartMode("scan");
               }}
             >
               Scan mode (view product)
@@ -500,6 +604,7 @@ export default function App() {
               onClick={() => {
                 resetAllWorkflows();
                 setMode("inventory");
+                setInvEntry("search");
               }}
             >
               Inventory mode (adjust counts)
@@ -512,11 +617,11 @@ export default function App() {
         )}
 
         {/* Shared scan panel */}
-        {(mode === "scan" || mode === "inventory") && (
+        {(mode === "scan" || (mode === "inventory" && invEntry === "scan")) &&  (
           <div className={`p-5 space-y-3 ${surface}`}>
             <button
               className={btnPrimary}
-              onClick={startScan}
+              onClick={() => startScan(mode === "inventory" ? "inventory" : "scan")}
               disabled={isScanning}
             >
               {isScanning ? "Scanning…" : "Open camera & scan QR"}
@@ -558,155 +663,239 @@ export default function App() {
 
         {/* Inventory mode panel */}
         {mode === "inventory" && (
-          <div className={`p-5 space-y-4 ${surface}`}>
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <div className={`text-sm ${textMuted}`}>Product code</div>
-                <div className="text-lg font-semibold">
-                  {invProductCode ?? "Scan a product to begin"}
-                </div>
-              </div>
-
-              <div className="text-right">
-                <div className={`text-sm ${textMuted}`}>On hand</div>
-                <div className="text-2xl font-semibold">
-                  {invLoading ? "…" : invOnHand ?? "—"}
-                </div>
-              </div>
-            </div>
-            {invImageUrl && (
-              <img
-                src={invImageUrl}
-                alt="Product"
-                className="w-full rounded-xl border border-[#E8D9D9]"
-              />
-            )}
-            {/* Last 3 adjustments */}
-            {invProductCode && (
-              <div className="rounded-xl border border-[#E8D9D9] bg-white p-3">
-                <div className="text-sm font-semibold text-[#111111]">
-                  Recent adjustments
-                </div>
-
-                {invAdjustments.length === 0 ? (
-                  <div className="text-sm text-[#5B4B4B] mt-1">
-                    No adjustments yet.
+          <div className="space-y-4">
+            {/* --- Top: two input containers --- */}
+            <div className="grid gap-4 md:grid-cols-2">
+              {/* Manual lookup container */}
+              <div className={`p-5 space-y-3 ${surface}`}>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="text-base font-semibold">Manual lookup</div>
+                    <div className={`text-xs ${textMuted}`}>
+                      Enter a product code like RB-10-02-16
+                    </div>
                   </div>
-                ) : (
-                  <div className="mt-2 space-y-2">
-                    {invAdjustments.map((a) => {
-                      const isAdd = a.delta >= 0;
-                      const deltaText = isAdd ? `+${a.delta}` : `${a.delta}`;
-                      const deltaClass = isAdd ? "text-[#15803D]" : "text-[#B91C1C]";
-                      const when = new Date(a.created_at).toLocaleString();
+                </div>
 
-                      return (
-                        <div
-                          key={a.id}
-                          className="flex items-start justify-between gap-3 border-t border-[#F1E7E7] pt-2 first:border-t-0 first:pt-0"
-                        >
-                          <div className="min-w-0">
-                            <div className="text-sm text-[#111111]">
-                              {a.reason ?? "—"}
-                            </div>
-                            {a.note ? (
-                              <div className="text-xs text-[#5B4B4B] truncate">
-                                {a.note}
-                              </div>
-                            ) : null}
-                            <div className="text-xs text-[#8A7B7B]">{when}</div>
-                          </div>
+                <div className="flex gap-2">
+                  <input
+                    className={inputStyle}
+                    value={invSearchCode}
+                    onChange={(e) => {
+                      setInvSearchCode(e.target.value);
+                      setInvSearchError(null);
+                    }}
+                    placeholder="RB-10-02-16"
+                    autoCapitalize="characters"
+                    autoCorrect="off"
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") handleInventorySearch();
+                    }}
+                  />
 
-                          <div className={`text-sm font-semibold ${deltaClass}`}>
-                            {deltaText}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
+                  <button
+                    type="button"
+                    className={btnSecondary}
+                    onClick={handleInventorySearch}
+                    disabled={invSearchBusy}
+                  >
+                    {invSearchBusy ? "Searching…" : "Search"}
+                  </button>
+                </div>
+
+                {invSearchError && (
+                  <p className="text-sm text-[#B42318] whitespace-pre-line">
+                    {invSearchError}
+                  </p>
                 )}
               </div>
-            )}
 
-            {/* Tap counter + preview */}
-            <div className="grid grid-cols-3 gap-2 items-end">
-              {/* Minus */}
-              <button
-                type="button"
-                className="rounded-xl px-3 py-3 text-xl font-semibold bg-[#FDECEC] border border-[#FCA5A5] text-[#7F1D1D] active:scale-[0.97]"
-                onClick={() => setInvDelta((d) => Math.min(d - 1, 0))}
-              >
-                –
-              </button>
+              {/* Camera scan container */}
+              <div className={`p-5 space-y-3 ${surface}`}>
+                <div>
+                  <div className="text-base font-semibold">Camera scan</div>
+                  <div className={`text-xs ${textMuted}`}>
+                    Scan the QR label to load the product
+                  </div>
+                </div>
 
-              {/* Preview */}
-              <div className="rounded-xl border border-[#E8D9D9] bg-white px-3 py-2 text-center">
-                <div className={`text-2xl font-bold ${previewColor}`}>{previewText}</div>
-                <div className="text-[11px] text-[#5B4B4B]">
-                  {invOnHand == null ? "result —" : `result ${resultingOnHand}`}
+                <button
+                  className={btnPrimary}
+                  onClick={() => startScan("inventory")}
+                  disabled={isScanning}
+                  type="button"
+                >
+                  {isScanning ? "Scanning…" : "Open camera & scan QR"}
+                </button>
+
+                {isScanning && (
+                  <button className={btnSecondary} onClick={stopScan} type="button">
+                    Stop scanning
+                  </button>
+                )}
+
+                {/* Keep this always mounted in inventory mode for scanning */}
+                <div id={regionId} className="w-full overflow-hidden rounded-xl" />
+
+                {scanError && (
+                  <p className="text-sm text-[#B42318] whitespace-pre-line">
+                    {scanError}
+                  </p>
+                )}
+              </div>
+            </div>
+
+            {/* --- Below: product details & adjustments (only after product selected) --- */}
+            {invProductCode ? (
+              <div className={`p-5 space-y-4 ${surface}`}>
+                {/* Header row */}
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className={`text-sm ${textMuted}`}>Product code</div>
+                    <div className="text-lg font-semibold">{invProductCode}</div>
+                  </div>
+
+                  <div className="text-right">
+                    <div className={`text-sm ${textMuted}`}>On hand</div>
+                    <div className="text-2xl font-semibold">
+                      {invLoading ? "…" : invOnHand ?? "—"}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Image */}
+                {invImageUrl && (
+                  <img
+                    src={invImageUrl}
+                    alt="Product"
+                    className="w-full rounded-xl border border-[#E8D9D9]"
+                  />
+                )}
+
+                {/* Last 3 adjustments */}
+                <div className="rounded-xl border border-[#E8D9D9] bg-white p-3">
+                  <div className="text-sm font-semibold text-[#111111]">
+                    Recent adjustments
+                  </div>
+
+                  {invAdjustments.length === 0 ? (
+                    <div className="text-sm text-[#5B4B4B] mt-1">No adjustments yet.</div>
+                  ) : (
+                    <div className="mt-2 space-y-2">
+                      {invAdjustments.map((a) => {
+                        const isAdd = a.delta >= 0;
+                        const deltaText = isAdd ? `+${a.delta}` : `${a.delta}`;
+                        const deltaClass = isAdd ? "text-[#15803D]" : "text-[#B91C1C]";
+                        const when = new Date(a.created_at).toLocaleString();
+
+                        return (
+                          <div
+                            key={a.id}
+                            className="flex items-start justify-between gap-3 border-t border-[#F1E7E7] pt-2 first:border-t-0 first:pt-0"
+                          >
+                            <div className="min-w-0">
+                              <div className="text-sm text-[#111111]">
+                                {reasonLabel(a.reason)}
+                              </div>
+                              {a.note ? (
+                                <div className="text-xs text-[#5B4B4B] truncate">
+                                  {a.note}
+                                </div>
+                              ) : null}
+                              <div className="text-xs text-[#8A7B7B]">{when}</div>
+                            </div>
+
+                            <div className={`text-sm font-semibold ${deltaClass}`}>
+                              {deltaText}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {/* Tap counter + preview */}
+                <div className="grid grid-cols-3 gap-2 items-end">
+                  <button
+                    type="button"
+                    className="rounded-xl px-3 py-3 text-xl font-semibold bg-[#FDECEC] border border-[#FCA5A5] text-[#7F1D1D] active:scale-[0.97]"
+                    onClick={() => setInvDelta((d) => Math.min(d - 1, 0))}
+                  >
+                    –
+                  </button>
+
+                  <div className="rounded-xl border border-[#E8D9D9] bg-white px-3 py-2 text-center">
+                    <div className={`text-2xl font-bold ${previewColor}`}>
+                      {previewText}
+                    </div>
+                    <div className="text-[11px] text-[#5B4B4B]">
+                      {invOnHand == null ? "result —" : `result ${resultingOnHand}`}
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    className="rounded-xl px-3 py-3 text-xl font-semibold bg-[#EAF6EF] border border-[#86EFAC] text-[#166534] active:scale-[0.97]"
+                    onClick={() => setInvDelta((d) => Math.max(d + 1, 0))}
+                  >
+                    +
+                  </button>
+                </div>
+
+                {/* Reason + Note */}
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="col-span-1">
+                    <div className={`text-xs ${textMuted} mb-1`}>Reason</div>
+                    <select
+                      className={inputStyle}
+                      value={invReason}
+                      onChange={(e) => setInvReason(e.target.value)}
+                    >
+                      {REASONS.map((r) => (
+                        <option key={r.value} value={r.value}>
+                          {r.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="col-span-1">
+                    <div className={`text-xs ${textMuted} mb-1`}>Note</div>
+                    <input
+                      className={inputStyle}
+                      value={invNote}
+                      onChange={(e) => setInvNote(e.target.value)}
+                      placeholder="Optional"
+                    />
+                  </div>
+                </div>
+
+                {/* Submit */}
+                <button className={btnBlue} onClick={submitAdjustment} disabled={!canSubmit}>
+                  Confirm change
+                </button>
+
+                {invSuccess && (
+                  <p className="text-sm text-[#166534] whitespace-pre-line">{invSuccess}</p>
+                )}
+
+                <div className={`text-xs ${textMuted}`}>
+                  Tip: For monthly cycle checks, keep reason as{" "}
+                  <span className="font-medium">monthly_cycle_count</span> and write your
+                  counted details in Note.
                 </div>
               </div>
-
-              {/* Plus */}
-              <button
-                type="button"
-                className="rounded-xl px-3 py-3 text-xl font-semibold bg-[#EAF6EF] border border-[#86EFAC] text-[#166534] active:scale-[0.97]"
-                onClick={() => setInvDelta((d) => Math.max(d + 1, 0))}
-              >
-                +
-              </button>
-            </div>
-
-
-            {/* Reason + Note */}
-            <div className="grid grid-cols-2 gap-2">
-              <div className="col-span-1">
-                <div className={`text-xs ${textMuted} mb-1`}>Reason</div>
-                <select
-                  className={inputStyle}
-                  value={invReason}
-                  onChange={(e) => setInvReason(e.target.value)}
-                >
-                  {REASONS.map((r) => (
-                    <option key={r.value} value={r.value}>
-                      {r.label}
-                    </option>
-                  ))}
-                </select>
+            ) : (
+              <div className={`p-5 ${surface}`}>
+                <div className={`text-sm ${textMuted}`}>
+                  Scan a product or search to begin.
+                </div>
               </div>
-              <div className="col-span-1">
-                <div className={`text-xs ${textMuted} mb-1`}>Note</div>
-                <input
-                  className={inputStyle}
-                  value={invNote}
-                  onChange={(e) => setInvNote(e.target.value)}
-                  placeholder="Optional"
-                />
-              </div>
-            </div>
-
-            {/* Submit */}
-            <button
-              className={btnBlue}
-              onClick={submitAdjustment}
-              disabled={!canSubmit}
-            >
-              Confirm change
-            </button>
-
-            {invSuccess && (
-              <p className="text-sm text-[#166534] whitespace-pre-line">
-                {invSuccess}
-              </p>
             )}
-
-            <div className={`text-xs ${textMuted}`}>
-              Tip: For monthly cycle checks, keep reason as{" "}
-              <span className="font-medium">monthly_cycle_count</span> and write
-              your counted details in Note.
-            </div>
           </div>
         )}
+
       </div>
     </div>
   );
