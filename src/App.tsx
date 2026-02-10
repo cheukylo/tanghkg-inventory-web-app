@@ -32,6 +32,13 @@ const REASONS: { label: string; value: string }[] = [
 const ON_HAND_TABLE = "inventory_on_hand_test";
 const ADJUST_RPC = "adjust_inventory_test";
 
+const LOCATIONS_TABLE = "locations_test";
+const LOC_ON_HAND_TABLE = "inventory_on_hand_by_location_test";
+const MOVE_RPC = "move_inventory_test";
+const MOVEMENTS_TABLE = "inventory_movements_test"; // optional if you want to show recent moves
+
+
+
 function normalizeProductCode(input: string) {
   const trimmed = input.trim();
   const lastSegment = trimmed.includes("/")
@@ -72,6 +79,65 @@ export default function App() {
   const qrRef = useRef<Html5Qrcode | null>(null);
   const regionId = "qr-reader";
 
+  // Inventory mode state
+  const [invError, setInvError] = useState<string | null>(null);   // inventory actions (adjust/move)
+  const [invProductCode, setInvProductCode] = useState<string | null>(null);
+  const [invOnHand, setInvOnHand] = useState<number | null>(null);
+  const [invLoading, setInvLoading] = useState(false);
+  const [invAdjustments, setInvAdjustments] = useState<Adjustment[]>([]);
+  const [invEntry, setInvEntry] = useState<"scan" | "search">("search");
+
+
+
+  const [invDelta, setInvDelta] = useState<number>(0); // signed integer
+  const [invReason, setInvReason] = useState<string>("monthly_cycle_count");
+  const [invNote, setInvNote] = useState<string>("");
+  const [invSuccess, setInvSuccess] = useState<string | null>(null);
+  const [invImageUrl, setInvImageUrl] = useState<string | null>(null);
+
+  const [invSearchCode, setInvSearchCode] = useState("");
+  const [invSearchError, setInvSearchError] = useState<string | null>(null);
+  const [invSearchBusy, setInvSearchBusy] = useState(false);
+
+  const [invAction, setInvAction] = useState("adjust"); // "adjust" | "move"
+
+
+
+
+
+  // Location tracking 
+  const [locBalances, setLocBalances] = useState<{
+    location_id: string;
+    on_hand: number;
+    location_code?: string;
+  }[]>([]);
+
+  const [fromLoc, setFromLoc] = useState<string>("");
+  const [toLoc, setToLoc] = useState<string>("");
+  const [moveQty, setMoveQty] = useState<number>(1);
+
+  type Location = {
+    id: string;
+    location_code: string;
+  };
+  const [locations, setLocations] = useState<Location[]>([]);
+
+  // Movement tracking
+
+  type Movement = {
+    id: number;
+    qty: number;
+    note: string | null;
+    created_at: string;
+    from_location_id: string;
+    to_location_id: string;
+    from_location?: { location_code: string } | null;
+    to_location?: { location_code: string } | null;
+  };
+
+  const [invMoves, setInvMoves] = useState<Movement[]>([]);
+
+
   // Scan mode output
   const [scanViewResult, setScanViewResult] = useState<ScanViewResult | null>(
     null
@@ -90,30 +156,61 @@ export default function App() {
       startScan(autoStartMode);
       setAutoStartMode(null);
     });
-
     return () => cancelAnimationFrame(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoStartMode, mode]);
 
+  // handle the Move/Adjust options within Inventory mode
+  useEffect(() => {
+    if (mode !== "inventory") return;
 
-  // Inventory mode state
-  const [invProductCode, setInvProductCode] = useState<string | null>(null);
-  const [invOnHand, setInvOnHand] = useState<number | null>(null);
-  const [invLoading, setInvLoading] = useState(false);
-  const [invAdjustments, setInvAdjustments] = useState<Adjustment[]>([]);
-  const [invEntry, setInvEntry] = useState<"scan" | "search">("search");
+    const loadLocations = async () => {
+      const { data, error } = await supabase
+        .from(LOCATIONS_TABLE)
+        .select("id, location_code")
+        .order("location_code", { ascending: true });
 
+      if (error) {
+        console.error("locations load error", error);
+        setLocations([]);
+        return;
+      }
+      setLocations(data ?? []);
+    };
 
+    loadLocations();
+  }, [mode]);
 
-  const [invDelta, setInvDelta] = useState<number>(0); // signed integer
-  const [invReason, setInvReason] = useState<string>("monthly_cycle_count");
-  const [invNote, setInvNote] = useState<string>("");
-  const [invSuccess, setInvSuccess] = useState<string | null>(null);
-  const [invImageUrl, setInvImageUrl] = useState<string | null>(null);
+  useEffect(() => {
+    if (mode !== "inventory") return;
+    if (!invProductCode) {
+      setLocBalances([]);
+      return;
+    }
+    if (invAction !== "move") return;
 
-  const [invSearchCode, setInvSearchCode] = useState("");
-  const [invSearchError, setInvSearchError] = useState<string | null>(null);
-  const [invSearchBusy, setInvSearchBusy] = useState(false);
+    const loadLocBalances = async () => {
+      // If your LOC_ON_HAND_TABLE already includes location_code, use it directly:
+      const { data, error } = await supabase
+        .from(LOC_ON_HAND_TABLE)
+        .select("location_id, on_hand, locations_test(location_code)")
+        .eq("product_code", invProductCode)
+        .order("on_hand", { ascending: false });
+
+      if (!error) {
+        setLocBalances(
+          (data ?? []).map((r: any) => ({
+            location_id: r.location_id,
+            on_hand: r.on_hand,
+            location_code: r.locations_test?.location_code ?? r.location_id,
+          }))
+        );
+      }
+    };
+
+    loadLocBalances();
+  }, [mode, invProductCode, invAction]);
+
 
   // Handle inventory search
   const handleInventorySearch = async () => {
@@ -156,12 +253,11 @@ export default function App() {
 
         // Reuse the exact same flow as QR scan (loads on-hand, image, last 3, etc.)
         await handleInventoryModeScan(productCode);
+        await loadRecentMoves(productCode);
       } finally {
         setInvSearchBusy(false);
       }
     };
-
-
 
   // Online offline 
   const [isOnline, setIsOnline] = useState<boolean>(() => navigator.onLine);
@@ -171,22 +267,49 @@ export default function App() {
   const textMain = "text-[#111111]";
   const textMuted = "text-[#5B4B4B]";
   const borderWarm = "border border-[#E8D9D9]";
-  const surface = `bg-white ${borderWarm} shadow-sm rounded-2xl`;
+  const surface =
+    "bg-white border-2 border-[#E0CACA] shadow-sm rounded-2xl";
 
   const btnPrimary =
-    "w-full rounded-xl px-4 py-2 font-medium text-white bg-[#2B0909] active:scale-[0.99] disabled:opacity-60";
+    "w-full rounded-xl px-4 py-2 font-medium text-white " +
+    "bg-[#2B0909] border-2 border-[#2B0909] " +
+    "hover:bg-[#3A0F0F] active:scale-[0.98] " +
+    "focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#2B0909] " +
+    "disabled:opacity-60 transition";
 
   const btnBlue =
     "w-full rounded-xl px-4 py-2 font-semibold text-white bg-[#2563EB] active:scale-[0.99] disabled:opacity-60"; // neutral blue
 
   const btnSecondary =
-    "w-full rounded-xl px-4 py-2 font-medium bg-white text-[#2B0909] border border-[#E8D9D9] active:scale-[0.99]";
+    "w-full rounded-xl px-4 py-2 font-medium " +
+    "bg-white text-[#2B0909] border-2 border-[#2B0909] " +
+    "hover:bg-[#FBF2F2] active:scale-[0.98] " +
+    "focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#2B0909] " +
+    "transition";
 
   const btnChip =
     "rounded-xl px-3 py-2 text-sm font-medium bg-white text-[#2B0909] border border-[#E8D9D9] active:scale-[0.99]";
 
   const inputStyle =
-    "w-full rounded-xl px-3 py-2 bg-white text-[#111111] border border-[#E8D9D9] placeholder:text-[#8A7B7B]";
+    "w-full rounded-xl px-3 py-2 bg-white text-[#111111] " +
+    "border-2 border-[#C9B6B6] " +
+    "focus:outline-none focus:ring-2 focus:ring-[#2B0909] focus:border-[#2B0909] " +
+    "hover:border-[#9F7A7A] transition";
+
+  const btnToggleActive =
+    "w-full rounded-xl px-4 py-2 font-semibold " +
+    "bg-[#2B0909] text-white " +
+    "border-2 border-[#2B0909] " +
+    "focus:outline-none focus:ring-2 focus:ring-[#2B0909]";
+
+  const btnToggleInactive =
+    "w-full rounded-xl px-4 py-2 font-medium " +
+    "bg-white text-[#2B0909] " +
+    "border-2 border-[#C9B6B6] " +
+    "hover:border-[#2B0909] " +
+    "focus:outline-none focus:ring-2 focus:ring-[#2B0909]";
+
+
 
   // ---------- Auth ----------
   useEffect(() => {
@@ -259,6 +382,8 @@ export default function App() {
     setInvSearchError(null);
     setInvSearchBusy(false);
     setInvEntry("search");
+    setInvMoves([]);
+
 
   };
 
@@ -275,12 +400,6 @@ export default function App() {
       setIsScanning(false);
     }
   };
-  // Clearing Scanner
-  const hardClearScannerUI = () => {
-  const el = document.getElementById(regionId);
-    if (el) el.innerHTML = ""; // removes any leftover video/canvas overlay
-  };
-
 
   const startScan = async (targetMode: "scan" | "inventory") => {
     setScanError(null);
@@ -294,6 +413,9 @@ export default function App() {
     }
 
     try {
+      const nodes = document.querySelectorAll(`#${regionId}`);
+      console.log("qr-reader nodes:", nodes.length, nodes);
+
       if (!qrRef.current) qrRef.current = new Html5Qrcode(regionId);
 
       await qrRef.current.start(
@@ -433,6 +555,8 @@ export default function App() {
       setInvAdjustments((adjRows ?? []) as Adjustment[]);
     }
 
+    await loadRecentMoves(productCode);
+
     setInvOnHand(invRow?.on_hand ?? 0);
     setInvLoading(false);
   };
@@ -453,7 +577,7 @@ export default function App() {
     !!invProductCode && invOnHand != null && invDelta !== 0 && !invLoading;
 
   const submitAdjustment = async () => {
-    setScanError(null);
+    setInvError(null);
     setInvSuccess(null);
 
     if (!canSubmit || !invProductCode) return;
@@ -466,7 +590,7 @@ export default function App() {
     });
 
     if (error) {
-      setScanError(`Adjustment failed: ${error.message}`);
+      setInvError(`Adjustment failed: ${error.message}`);
       return;
     }
 
@@ -478,7 +602,7 @@ export default function App() {
       .maybeSingle();
 
     if (invErr) {
-      setScanError(`Adjustment saved, but refresh failed: ${invErr.message}`);
+      setInvError(`Adjustment saved, but refresh failed: ${invErr.message}`);
       return;
     }
 
@@ -495,6 +619,110 @@ export default function App() {
 
     if (!adjErr) setInvAdjustments((adjRows ?? []) as Adjustment[]);
   };
+
+  // Moving inventory
+
+  const submitMove = async () => {
+    setInvError(null);
+    setInvSuccess(null);
+
+    if (!invProductCode) return;
+
+    if (!fromLoc || !toLoc) {
+      setInvError("Move failed: select both From and To locations.");
+      return;
+    }
+    if (fromLoc === toLoc) {
+      setInvError("Move failed: From and To locations must be different.");
+      return;
+    }
+    if (!moveQty || moveQty <= 0) {
+      setInvError("Move failed: quantity must be at least 1.");
+      return;
+    }
+
+    const { error } = await supabase.rpc(MOVE_RPC, {
+      p_product_code: invProductCode,
+      p_from_location_id: fromLoc, // string
+      p_to_location_id: toLoc, //string
+      p_qty: moveQty,
+      p_note: invNote || null,
+    });
+
+    if (error) {
+      setInvError(`Move failed: ${error.message}`);
+      return;
+    }
+
+    // Refresh TOTAL on-hand (transfer should not change it, but keep UI synced)
+    const { data: invRow, error: invErr } = await supabase
+      .from(ON_HAND_TABLE)
+      .select("on_hand")
+      .eq("product_code", invProductCode)
+      .maybeSingle();
+
+    if (invErr) {
+      setInvError(`Move saved, but refresh failed: ${invErr.message}`);
+      return;
+    }
+
+    setInvOnHand(invRow?.on_hand ?? 0);
+    setInvSuccess("Inventory moved.");
+
+    // Refresh per-location balances for this product
+    const { data, error: locErr } = await supabase
+      .from(LOC_ON_HAND_TABLE)
+      .select("location_id, on_hand, locations_test(location_code)")
+      .eq("product_code", invProductCode)
+      .order("on_hand", { ascending: false });
+
+    if (locErr) {
+      console.error("loc refresh error", locErr);
+    } else {
+      setLocBalances(
+        (data ?? []).map((r: any) => ({
+          location_id: r.location_id,
+          on_hand: r.on_hand,
+          location_code: r.locations_test?.location_code ?? r.location_id,
+        }))
+      );
+    }
+    await loadRecentMoves(invProductCode);
+
+    // Reset move fields
+    setMoveQty(1);
+    setFromLoc("");
+    setToLoc("");
+  };
+
+  // Loading Recent Moving History 
+  const loadRecentMoves = async (productCode: string) => {
+    const { data, error } = await supabase
+      .from(MOVEMENTS_TABLE)
+      .select(`
+        id,
+        quantity,
+        note,
+        created_at,
+        from_location_id,
+        to_location_id,
+        from_location:locations_test!inventory_movements_test_from_location_id_fkey(location_code),
+        to_location:locations_test!inventory_movements_test_to_location_id_fkey(location_code)
+      `)
+      .eq("product_code", productCode)
+      .order("created_at", { ascending: false })
+      .limit(3);
+
+    if (error) {
+      console.error("move history failed:", error);
+      setInvMoves([]);
+      return;
+    }
+
+    setInvMoves((data ?? []) as Movement[]);
+  };
+
+
 
   // ---------- Render ----------
   if (!sessionChecked) {
@@ -513,7 +741,22 @@ export default function App() {
         className={`min-h-screen flex items-center justify-center p-4 ${appBg} ${textMain}`}
       >
         <div className={`w-full max-w-sm p-5 space-y-3 ${surface}`}>
-          <h2 className="text-xl font-semibold">Sign in</h2>
+          <div className="flex flex-col items-center gap-3 mb-2">
+            <div className="w-64 h-64 rounded-2xl overflow-hidden bg-white border border-[#E8D9D9]">
+              <img
+                src="/logo.JPEG"
+                alt="Company logo"
+                className="w-full h-full object-cover scale-110"
+              />
+            </div>
+
+            <h2 className="text-xl font-semibold text-[#2B0909]">
+              Sign in
+            </h2>
+            <p className="text-xs text-[#5B4B4B] text-center">
+              Inventory management
+            </p>
+          </div>
 
           <input
             className={inputStyle}
@@ -558,6 +801,22 @@ export default function App() {
           <span className="text-xs text-[#5B4B4B]">
             {isOnline ? "Online" : "Offline"}
           </span>
+        </div>
+        <div className="flex items-center gap-3 mb-4 p-3 rounded-xl bg-white border border-[#E8D9D9]">
+          <img
+            src="/logo.JPEG"
+            alt="Company logo"
+            className="w-10 h-10 object-contain"
+          />
+
+          <div className="flex-1">
+            <div className="text-base font-semibold text-[#2B0909]">
+              Inventory Manager
+            </div>
+            <div className="text-xs text-[#5B4B4B]">
+              Scan • Search • Adjust
+            </div>
+          </div>
         </div>        
         <div className="flex items-center justify-between">
           <h1 className="text-2xl font-semibold">
@@ -586,6 +845,8 @@ export default function App() {
           </div>
         </div>
 
+
+
         {/* Home menu */}
         {mode === "home" && (
           <div className={`p-5 space-y-3 ${surface}`}>
@@ -600,7 +861,7 @@ export default function App() {
               Scan mode (view product)
             </button>
             <button
-              className={btnBlue}
+              className={btnPrimary}
               onClick={() => {
                 resetAllWorkflows();
                 setMode("inventory");
@@ -633,7 +894,7 @@ export default function App() {
               </button>
             )}
 
-            <div id={regionId} className="w-full overflow-hidden rounded-xl" />
+            <div id={regionId} className="w-full overflow-hidden rounded-xl min-h-[260px]" />
 
             {scanError && (
               <p className="text-sm text-[#B42318] whitespace-pre-line">
@@ -749,6 +1010,12 @@ export default function App() {
             {invProductCode ? (
               <div className={`p-5 space-y-4 ${surface}`}>
                 {/* Header row */}
+                <div className={`text-xs ${textMuted}`}>
+                  {invAction === "adjust"
+                    ? "Adjust total on-hand (damage, recount, corrections)."
+                    : "Move stock between locations (total on-hand stays the same)."}
+                </div>
+
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <div className={`text-sm ${textMuted}`}>Product code</div>
@@ -762,6 +1029,32 @@ export default function App() {
                     </div>
                   </div>
                 </div>
+                {/* Action switch */}
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    className={invAction === "adjust" ? btnToggleActive : btnToggleInactive}
+                    onClick={() => {
+                      setInvAction("adjust");
+                      setInvError(null);
+                      setInvSuccess(null);
+                    }}
+                  >
+                    Adjust
+                  </button>
+
+                  <button
+                    type="button"
+                    className={invAction === "move" ? btnToggleActive : btnToggleInactive}
+                    onClick={() => {
+                      setInvAction("move");
+                      setInvError(null);
+                      setInvSuccess(null);
+                    }}
+                  >
+                    Move
+                  </button>
+                </div>
 
                 {/* Image */}
                 {invImageUrl && (
@@ -772,112 +1065,253 @@ export default function App() {
                   />
                 )}
 
-                {/* Last 3 adjustments */}
-                <div className="rounded-xl border border-[#E8D9D9] bg-white p-3">
-                  <div className="text-sm font-semibold text-[#111111]">
-                    Recent adjustments
-                  </div>
+                {invAction === "adjust" && (
+                  <>
+                    {/* Last 3 adjustments */}
+                    <div className="rounded-xl border border-[#E8D9D9] bg-white p-3">
+                      <div className="text-sm font-semibold text-[#111111]">
+                        Recent adjustments
+                      </div>
 
-                  {invAdjustments.length === 0 ? (
-                    <div className="text-sm text-[#5B4B4B] mt-1">No adjustments yet.</div>
-                  ) : (
-                    <div className="mt-2 space-y-2">
-                      {invAdjustments.map((a) => {
-                        const isAdd = a.delta >= 0;
-                        const deltaText = isAdd ? `+${a.delta}` : `${a.delta}`;
-                        const deltaClass = isAdd ? "text-[#15803D]" : "text-[#B91C1C]";
-                        const when = new Date(a.created_at).toLocaleString();
+                      {invAdjustments.length === 0 ? (
+                        <div className="text-sm text-[#5B4B4B] mt-1">No adjustments yet.</div>
+                      ) : (
+                        <div className="mt-2 space-y-2">
+                          {invAdjustments.map((a) => {
+                            const isAdd = a.delta >= 0;
+                            const deltaText = isAdd ? `+${a.delta}` : `${a.delta}`;
+                            const deltaClass = isAdd ? "text-[#15803D]" : "text-[#B91C1C]";
+                            const when = new Date(a.created_at).toLocaleString();
 
-                        return (
-                          <div
-                            key={a.id}
-                            className="flex items-start justify-between gap-3 border-t border-[#F1E7E7] pt-2 first:border-t-0 first:pt-0"
-                          >
-                            <div className="min-w-0">
-                              <div className="text-sm text-[#111111]">
-                                {reasonLabel(a.reason)}
-                              </div>
-                              {a.note ? (
-                                <div className="text-xs text-[#5B4B4B] truncate">
-                                  {a.note}
+                            return (
+                              <div
+                                key={a.id}
+                                className="flex items-start justify-between gap-3 border-t border-[#F1E7E7] pt-2 first:border-t-0 first:pt-0"
+                              >
+                                <div className="min-w-0">
+                                  <div className="text-sm text-[#111111]">
+                                    {reasonLabel(a.reason)}
+                                  </div>
+                                  {a.note ? (
+                                    <div className="text-xs text-[#5B4B4B] truncate">
+                                      {a.note}
+                                    </div>
+                                  ) : null}
+                                  <div className="text-xs text-[#8A7B7B]">{when}</div>
                                 </div>
-                              ) : null}
-                              <div className="text-xs text-[#8A7B7B]">{when}</div>
-                            </div>
 
-                            <div className={`text-sm font-semibold ${deltaClass}`}>
-                              {deltaText}
-                            </div>
-                          </div>
-                        );
-                      })}
+                                <div className={`text-sm font-semibold ${deltaClass}`}>
+                                  {deltaText}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
-                  )}
-                </div>
 
-                {/* Tap counter + preview */}
-                <div className="grid grid-cols-3 gap-2 items-end">
-                  <button
-                    type="button"
-                    className="rounded-xl px-3 py-3 text-xl font-semibold bg-[#FDECEC] border border-[#FCA5A5] text-[#7F1D1D] active:scale-[0.97]"
-                    onClick={() => setInvDelta((d) => Math.min(d - 1, 0))}
-                  >
-                    –
-                  </button>
+                    {/* Tap counter + preview */}
+                    <div className="grid grid-cols-3 gap-2 items-end">
+                      <button
+                        type="button"
+                        className="rounded-xl px-3 py-3 text-xl font-semibold bg-[#FDECEC] border border-[#FCA5A5] text-[#7F1D1D] active:scale-[0.97]"
+                        onClick={() => setInvDelta((d) => Math.min(d - 1, 0))}
+                      >
+                        –
+                      </button>
 
-                  <div className="rounded-xl border border-[#E8D9D9] bg-white px-3 py-2 text-center">
-                    <div className={`text-2xl font-bold ${previewColor}`}>
-                      {previewText}
+                      <div className="rounded-xl border border-[#E8D9D9] bg-white px-3 py-2 text-center">
+                        <div className={`text-2xl font-bold ${previewColor}`}>
+                          {previewText}
+                        </div>
+                        <div className="text-[11px] text-[#5B4B4B]">
+                          {invOnHand == null ? "result —" : `result ${resultingOnHand}`}
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        className="rounded-xl px-3 py-3 text-xl font-semibold bg-[#EAF6EF] border border-[#86EFAC] text-[#166534] active:scale-[0.97]"
+                        onClick={() => setInvDelta((d) => Math.max(d + 1, 0))}
+                      >
+                        +
+                      </button>
                     </div>
-                    <div className="text-[11px] text-[#5B4B4B]">
-                      {invOnHand == null ? "result —" : `result ${resultingOnHand}`}
+
+                    {/* Reason + Note */}
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="col-span-1">
+                        <div className={`text-xs ${textMuted} mb-1`}>Reason</div>
+                        <select
+                          className={inputStyle}
+                          value={invReason}
+                          onChange={(e) => setInvReason(e.target.value)}
+                        >
+                          {REASONS.map((r) => (
+                            <option key={r.value} value={r.value}>
+                              {r.label}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div className="col-span-1">
+                        <div className={`text-xs ${textMuted} mb-1`}>Note</div>
+                        <input
+                          className={inputStyle}
+                          value={invNote}
+                          onChange={(e) => setInvNote(e.target.value)}
+                          placeholder="Optional"
+                        />
+                      </div>
                     </div>
-                  </div>
 
-                  <button
-                    type="button"
-                    className="rounded-xl px-3 py-3 text-xl font-semibold bg-[#EAF6EF] border border-[#86EFAC] text-[#166534] active:scale-[0.97]"
-                    onClick={() => setInvDelta((d) => Math.max(d + 1, 0))}
-                  >
-                    +
-                  </button>
-                </div>
+                    {/* Submit */}
+                    <button className={btnBlue} onClick={submitAdjustment} disabled={!canSubmit}>
+                      Confirm change
+                    </button>
+                  </>
+                )}
 
-                {/* Reason + Note */}
-                <div className="grid grid-cols-2 gap-2">
-                  <div className="col-span-1">
-                    <div className={`text-xs ${textMuted} mb-1`}>Reason</div>
-                    <select
-                      className={inputStyle}
-                      value={invReason}
-                      onChange={(e) => setInvReason(e.target.value)}
+                {invAction === "move" && (
+                  <div className="space-y-3">
+                    {/* Where it is now */}
+                    <div className="rounded-xl border border-[#E8D9D9] bg-white p-3">
+                      <div className="text-sm font-semibold text-[#111111]">Where it is</div>
+
+                      {locBalances.length === 0 ? (
+                        <div className="text-sm text-[#5B4B4B] mt-1">No stock recorded in any location.</div>
+                      ) : (
+                        <div className="mt-2 space-y-2">
+                          {locBalances
+                            .filter((x) => x.on_hand > 0)
+                            .sort((a, b) => b.on_hand - a.on_hand)
+                            .map((x) => (
+                              <div key={x.location_id} className="flex items-center justify-between">
+                                <div className="text-sm text-[#111111]">{x.location_code ?? x.location_id}</div>
+                                <div className="text-sm font-semibold">{x.on_hand}</div>
+                              </div>
+                            ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Recent moves */}
+                    <div className="rounded-xl border border-[#E8D9D9] bg-white p-3">
+                      <div className="text-sm font-semibold text-[#111111]">Recent moves</div>
+
+                      {invMoves.length === 0 ? (
+                        <div className="text-sm text-[#5B4B4B] mt-1">No moves yet.</div>
+                      ) : (
+                        <div className="mt-2 space-y-2">
+                          {invMoves.map((m) => {
+                            const when = new Date(m.created_at).toLocaleString();
+                            const fromCode = m.from_location?.location_code ?? m.from_location_id;
+                            const toCode = m.to_location?.location_code ?? m.to_location_id;
+
+                            return (
+                              <div
+                                key={m.id}
+                                className="flex items-start justify-between gap-3 border-t border-[#F1E7E7] pt-2 first:border-t-0 first:pt-0"
+                              >
+                                <div className="min-w-0">
+                                  <div className="text-sm text-[#111111]">
+                                    (<span className="font-semibold">{m.quantity}</span>) {fromCode} → {toCode}
+                                  </div>
+                                  {m.note ? (
+                                    <div className="text-xs text-[#5B4B4B] truncate">{m.note}</div>
+                                  ) : null}
+                                  <div className="text-xs text-[#8A7B7B]">{when}</div>
+                                </div>
+
+                                <div className="text-sm font-semibold text-[#111111]">
+                                  {m.qty}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Move form */}
+                    <div className="grid grid-cols-2 gap-2">
+                      {/* FROM */}
+                      <div className="col-span-1">
+                        <div className={`text-xs ${textMuted} mb-1`}>From</div>
+                        <select
+                          className={inputStyle}
+                          value={fromLoc}
+                          onChange={(e) => setFromLoc(e.target.value)}
+                          disabled={(locBalances ?? []).filter((x) => Number(x.on_hand ?? 0) > 0).length === 0}
+                        >
+                          <option value="">Select location</option>
+
+                          {(locBalances ?? [])
+                            .filter((x) => Number(x.on_hand ?? 0) > 0)
+                            .sort((a, b) => Number(b.on_hand ?? 0) - Number(a.on_hand ?? 0))
+                            .map((x) => (
+                              <option key={x.location_id} value={x.location_id}>
+                                {x.location_code ?? x.location_id} ({x.on_hand})
+                              </option>
+                            ))}
+                        </select>
+                      </div>
+
+                      {/* TO */}
+                      <div className="col-span-1">
+                        <div className={`text-xs ${textMuted} mb-1`}>To</div>
+
+                        <select
+                          className={inputStyle}
+                          value={toLoc}
+                          onChange={(e) => setToLoc(e.target.value)}
+                          disabled={locations.length === 0}
+                        >
+                          <option value="">Select location</option>
+
+                          {locations
+                            .filter((l) => !fromLoc || l.id !== fromLoc) // optional: prevent choosing same as From
+                            .map((l) => (
+                              <option key={l.id} value={l.id}>
+                                {l.location_code}
+                              </option>
+                            ))}
+                        </select>
+                      </div>
+                    </div>
+
+
+                    <div>
+                      <div className={`text-xs ${textMuted} mb-1`}>Quantity</div>
+                      <input
+                        className={inputStyle}
+                        type="number"
+                        min={1}
+                        value={moveQty}
+                        onChange={(e) => setMoveQty(Math.max(1, Number(e.target.value) || 1))}
+                      />
+                    </div>
+
+                    <button
+                      className={btnBlue}
+                      type="button"
+                      onClick={submitMove}
+                      disabled={!fromLoc || !toLoc || fromLoc === toLoc || moveQty < 1}
                     >
-                      {REASONS.map((r) => (
-                        <option key={r.value} value={r.value}>
-                          {r.label}
-                        </option>
-                      ))}
-                    </select>
+                      Confirm move
+                    </button>
                   </div>
-
-                  <div className="col-span-1">
-                    <div className={`text-xs ${textMuted} mb-1`}>Note</div>
-                    <input
-                      className={inputStyle}
-                      value={invNote}
-                      onChange={(e) => setInvNote(e.target.value)}
-                      placeholder="Optional"
-                    />
-                  </div>
-                </div>
-
-                {/* Submit */}
-                <button className={btnBlue} onClick={submitAdjustment} disabled={!canSubmit}>
-                  Confirm change
-                </button>
+                )}
 
                 {invSuccess && (
                   <p className="text-sm text-[#166534] whitespace-pre-line">{invSuccess}</p>
+                )}
+
+                {invError && (
+                  <p className="text-sm text-[#B42318] whitespace-pre-line">
+                    {invError}
+                  </p>
                 )}
 
                 <div className={`text-xs ${textMuted}`}>
@@ -900,3 +1334,4 @@ export default function App() {
     </div>
   );
 }
+
