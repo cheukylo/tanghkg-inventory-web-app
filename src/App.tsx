@@ -102,6 +102,22 @@ export default function App() {
   const [invAction, setInvAction] = useState("adjust"); // "adjust" | "move"
 
 
+  // New tabs within inventory mode 2-16-2026
+  type MovementType = "receive" | "send" | "transfer" | "adjust";
+  const [movementType, setMovementType] = useState<MovementType>("receive");
+
+  const [adjustLoc, setAdjustLoc] = useState("");
+  const [receiveToLoc, setReceiveToLoc] = useState("");
+  const [receiveQty, setReceiveQty] = useState(1);
+  const [sendFromLoc, setSendFromLoc] = useState("");
+  const [sendQty, setSendQty] = useState(1);
+
+  const submitReceive = () => setInvError("submitReceive not implemented yet");
+  const submitSend = () => setInvError("submitSend not implemented yet");
+
+
+
+
 
 
 
@@ -858,7 +874,7 @@ export default function App() {
                 setAutoStartMode("scan");
               }}
             >
-              Scan mode (view product)
+              Lookup (view product)
             </button>
             <button
               className={btnPrimary}
@@ -868,10 +884,10 @@ export default function App() {
                 setInvEntry("search");
               }}
             >
-              Inventory mode (adjust counts)
+              Inventory Movements (adjust counts)
             </button>
             <p className={`text-sm ${textMuted}`}>
-              Use scan mode to view photos. Use inventory mode to apply +/- deltas
+              Use Lookup to preview product photos. Use Inventory Movements to adjust levels
               (and log monthly cycle checks).
             </p>
           </div>
@@ -1011,11 +1027,11 @@ export default function App() {
               <div className={`p-5 space-y-4 ${surface}`}>
                 {/* Header row */}
                 <div className={`text-xs ${textMuted}`}>
-                  {invAction === "adjust"
-                    ? "Adjust total on-hand (damage, recount, corrections)."
-                    : "Move stock between locations (total on-hand stays the same)."}
+                  {movementType === "adjust" && "Adjust on-hand at a location (damage, recount, corrections)."}
+                  {movementType === "receive" && "Receive stock into a location (adds on-hand)."}
+                  {movementType === "send" && "Send stock out from a location (removes on-hand)."}
+                  {movementType === "transfer" && "Move stock between locations (total on-hand stays the same)."}
                 </div>
-
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <div className={`text-sm ${textMuted}`}>Product code</div>
@@ -1029,32 +1045,53 @@ export default function App() {
                     </div>
                   </div>
                 </div>
-                {/* Action switch */}
-                <div className="flex gap-2">
+                {/* Movement tabs switch */}
+                <div className="flex gap-2 flex-wrap">
                   <button
                     type="button"
-                    className={invAction === "adjust" ? btnToggleActive : btnToggleInactive}
-                    onClick={() => {
-                      setInvAction("adjust");
-                      setInvError(null);
-                      setInvSuccess(null);
-                    }}
+                    className={movementType === "receive" ? btnToggleActive : btnToggleInactive}
+                    onClick={() => { setMovementType("receive"); setInvError(null); setInvSuccess(null); }}
                   >
-                    Adjust
+                    Receive
                   </button>
 
                   <button
                     type="button"
-                    className={invAction === "move" ? btnToggleActive : btnToggleInactive}
-                    onClick={() => {
-                      setInvAction("move");
-                      setInvError(null);
-                      setInvSuccess(null);
-                    }}
+                    className={movementType === "send" ? btnToggleActive : btnToggleInactive}
+                    onClick={() => { setMovementType("send"); setInvError(null); setInvSuccess(null); }}
                   >
-                    Move
+                    Send
+                  </button>
+
+                  <button
+                    type="button"
+                    className={movementType === "transfer" ? btnToggleActive : btnToggleInactive}
+                    onClick={() => { setMovementType("transfer"); setInvError(null); setInvSuccess(null); }}
+                  >
+                    Transfer
+                  </button>
+
+                  <button
+                    type="button"
+                    className={movementType === "adjust" ? btnToggleActive : btnToggleInactive}
+                    onClick={() => { setMovementType("adjust"); setInvError(null); setInvSuccess(null); }}
+                  >
+                    Adjust
                   </button>
                 </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="col-span-2">
+                    <div className={`text-xs ${textMuted} mb-1`}>Location</div>
+                    <select className={inputStyle} value={adjustLoc} onChange={(e) => setAdjustLoc(e.target.value)}>
+                      <option value="">Select location</option>
+                      {locations.map((l) => (
+                        <option key={l.id} value={l.id}>{l.location_code}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
 
                 {/* Image */}
                 {invImageUrl && (
@@ -1065,7 +1102,7 @@ export default function App() {
                   />
                 )}
 
-                {invAction === "adjust" && (
+                {movementType === "adjust" && (
                   <>
                     {/* Last 3 adjustments */}
                     <div className="rounded-xl border border-[#E8D9D9] bg-white p-3">
@@ -1172,8 +1209,111 @@ export default function App() {
                     </button>
                   </>
                 )}
+                
+                {movementType === "receive" && (
+                  <div className="space-y-3">
+                    <div>
+                      <div className={`text-xs ${textMuted} mb-1`}>To location</div>
+                      <select
+                        className={inputStyle}
+                        value={receiveToLoc}
+                        onChange={(e) => setReceiveToLoc(e.target.value)}
+                        disabled={locations.length === 0}
+                      >
+                        <option value="">Select location</option>
+                        {locations.map((l) => (
+                          <option key={l.id} value={l.id}>{l.location_code}</option>
+                        ))}
+                      </select>
+                    </div>
 
-                {invAction === "move" && (
+                    <div>
+                      <div className={`text-xs ${textMuted} mb-1`}>Quantity</div>
+                      <input
+                        className={inputStyle}
+                        type="number"
+                        min={1}
+                        value={receiveQty}
+                        onChange={(e) => setReceiveQty(Math.max(1, Number(e.target.value) || 1))}
+                      />
+                    </div>
+
+                    <button
+                      className={btnBlue}
+                      type="button"
+                      onClick={submitReceive}  
+                      disabled={!receiveToLoc || receiveQty < 1}
+                    >
+                      Confirm receive
+                    </button>
+                  </div>
+                )}
+
+                {movementType === "send" && (
+                  <div className="space-y-3">
+                    {/* Optional: show balances like your “Where it is” panel */}
+                    <div className="rounded-xl border border-[#E8D9D9] bg-white p-3">
+                      <div className="text-sm font-semibold text-[#111111]">Available by location</div>
+                      {locBalances.length === 0 ? (
+                        <div className="text-sm text-[#5B4B4B] mt-1">No stock recorded in any location.</div>
+                      ) : (
+                        <div className="mt-2 space-y-2">
+                          {locBalances
+                            .filter((x) => x.on_hand > 0)
+                            .sort((a, b) => b.on_hand - a.on_hand)
+                            .map((x) => (
+                              <div key={x.location_id} className="flex items-center justify-between">
+                                <div className="text-sm text-[#111111]">{x.location_code ?? x.location_id}</div>
+                                <div className="text-sm font-semibold">{x.on_hand}</div>
+                              </div>
+                            ))}
+                        </div>
+                      )}
+                    </div>
+
+                    <div>
+                      <div className={`text-xs ${textMuted} mb-1`}>From location</div>
+                      <select
+                        className={inputStyle}
+                        value={sendFromLoc}
+                        onChange={(e) => setSendFromLoc(e.target.value)}
+                        disabled={(locBalances ?? []).filter((x) => Number(x.on_hand ?? 0) > 0).length === 0}
+                      >
+                        <option value="">Select location</option>
+                        {(locBalances ?? [])
+                          .filter((x) => Number(x.on_hand ?? 0) > 0)
+                          .sort((a, b) => Number(b.on_hand ?? 0) - Number(a.on_hand ?? 0))
+                          .map((x) => (
+                            <option key={x.location_id} value={x.location_id}>
+                              {x.location_code ?? x.location_id} ({x.on_hand})
+                            </option>
+                          ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <div className={`text-xs ${textMuted} mb-1`}>Quantity</div>
+                      <input
+                        className={inputStyle}
+                        type="number"
+                        min={1}
+                        value={sendQty}
+                        onChange={(e) => setSendQty(Math.max(1, Number(e.target.value) || 1))}
+                      />
+                    </div>
+
+                    <button
+                      className={btnBlue}
+                      type="button"
+                      onClick={submitSend}
+                      disabled={!sendFromLoc || sendQty < 1}
+                    >
+                      Confirm send
+                    </button>
+                  </div>
+                )}
+
+                {movementType === "transfer" && (
                   <div className="space-y-3">
                     {/* Where it is now */}
                     <div className="rounded-xl border border-[#E8D9D9] bg-white p-3">
@@ -1314,6 +1454,7 @@ export default function App() {
                   </p>
                 )}
 
+                {/* Space fillers */}
                 <div className={`text-xs ${textMuted}`}>
                   Tip: For monthly cycle checks, keep reason as{" "}
                   <span className="font-medium">monthly_cycle_count</span> and write your
