@@ -1025,6 +1025,14 @@ export default function App() {
             {/* --- Below: product details & adjustments (only after product selected) --- */}
             {invProductCode ? (
               <div className={`p-5 space-y-4 ${surface}`}>
+                {/* Image */}
+                {invImageUrl && (
+                  <img
+                    src={invImageUrl}
+                    alt="Product"
+                    className="w-full rounded-xl border border-[#E8D9D9]"
+                  />
+                )}
                 {/* Header row */}
                 <div className={`text-xs ${textMuted}`}>
                   {movementType === "adjust" && "Adjust on-hand at a location (damage, recount, corrections)."}
@@ -1080,30 +1088,28 @@ export default function App() {
                   </button>
                 </div>
 
-                <div className="grid grid-cols-2 gap-2">
-                  <div className="col-span-2">
-                    <div className={`text-xs ${textMuted} mb-1`}>Location</div>
-                    <select className={inputStyle} value={adjustLoc} onChange={(e) => setAdjustLoc(e.target.value)}>
-                      <option value="">Select location</option>
-                      {locations.map((l) => (
-                        <option key={l.id} value={l.id}>{l.location_code}</option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
 
-
-                {/* Image */}
-                {invImageUrl && (
-                  <img
-                    src={invImageUrl}
-                    alt="Product"
-                    className="w-full rounded-xl border border-[#E8D9D9]"
-                  />
-                )}
 
                 {movementType === "adjust" && (
                   <>
+                    {/* Adjustment Location */}
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="col-span-2">
+                        <div className={`text-xs ${textMuted} mb-1`}>Location</div>
+                        <select
+                          className={inputStyle}
+                          value={adjustLoc}
+                          onChange={(e) => setAdjustLoc(e.target.value)}
+                        >
+                          <option value="">Select location</option>
+                          {locations.map((l) => (
+                            <option key={l.id} value={l.id}>
+                              {l.location_code}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
                     {/* Last 3 adjustments */}
                     <div className="rounded-xl border border-[#E8D9D9] bg-white p-3">
                       <div className="text-sm font-semibold text-[#111111]">
