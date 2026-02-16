@@ -36,6 +36,9 @@ const LOCATIONS_TABLE = "locations_test";
 const LOC_ON_HAND_TABLE = "inventory_on_hand_by_location_test";
 const MOVE_RPC = "move_inventory_test";
 const MOVEMENTS_TABLE = "inventory_movements_test"; // optional if you want to show recent moves
+const ADJUST_LOC_RPC = "adjust_inventory_by_location_test"; // you’ll create in Supabase
+const LOC_ADJUSTMENTS_TABLE = "inventory_adjustments_by_location_test"; // ledger
+
 
 
 
@@ -112,12 +115,137 @@ export default function App() {
   const [sendFromLoc, setSendFromLoc] = useState("");
   const [sendQty, setSendQty] = useState(1);
 
-  const submitReceive = () => setInvError("submitReceive not implemented yet");
-  const submitSend = () => setInvError("submitSend not implemented yet");
+  // Shared refreshers for inventory changes
+  const refreshOnHandGlobal = async (productCode: string) => {
+    const { data: invRow, error: invErr } = await supabase
+      .from(ON_HAND_TABLE)
+      .select("on_hand")
+      .eq("product_code", productCode)
+      .maybeSingle();
+
+    if (invErr) throw invErr;
+    setInvOnHand(invRow?.on_hand ?? 0);
+  };
+
+  const refreshLocBalances = async (productCode: string) => {
+    const { data, error: locErr } = await supabase
+      .from(LOC_ON_HAND_TABLE)
+      .select("location_id, on_hand, locations_test(location_code)")
+      .eq("product_code", productCode)
+      .order("on_hand", { ascending: false });
+
+    if (locErr) throw locErr;
+
+    setLocBalances(
+      (data ?? []).map((r: any) => ({
+        location_id: r.location_id,
+        on_hand: r.on_hand,
+        location_code: r.locations_test?.location_code ?? r.location_id,
+      }))
+    );
+  };
 
 
+  // Submit Receive
+  const submitReceive = async () => {
+    setInvError(null);
+    setInvSuccess(null);
 
+    if (!invProductCode) return;
 
+    if (!receiveToLoc) {
+      setInvError("Receive failed: select a To location.");
+      return;
+    }
+    if (!receiveQty || receiveQty <= 0) {
+      setInvError("Receive failed: quantity must be at least 1.");
+      return;
+    }
+
+    const { error } = await supabase.rpc(ADJUST_LOC_RPC, {
+      p_product_code: invProductCode,
+      p_location_id: receiveToLoc,
+      p_delta: receiveQty,     // +qty
+      p_reason: "receive",
+      p_note: invNote || null,
+    });
+
+    if (error) {
+      setInvError(`Receive failed: ${error.message}`);
+      return;
+    }
+
+    try {
+      await refreshOnHandGlobal(invProductCode);
+      await refreshLocBalances(invProductCode);
+    } catch (e: any) {
+      setInvError(`Receive saved, but refresh failed: ${e.message}`);
+      return;
+    }
+
+    setInvSuccess("Inventory received.");
+
+    // reset fields
+    setReceiveQty(1);
+    setReceiveToLoc("");
+  };
+
+  // Submit Send 
+  const submitSend = async () => {
+    setInvError(null);
+    setInvSuccess(null);
+
+    if (!invProductCode) return;
+
+    if (!sendFromLoc) {
+      setInvError("Send failed: select a From location.");
+      return;
+    }
+    if (!sendQty || sendQty <= 0) {
+      setInvError("Send failed: quantity must be at least 1.");
+      return;
+    }
+
+    const available = getOnHandAt(sendFromLoc);
+    if (sendQty > available) {
+      setInvError(`Send failed: insufficient stock at this location (have ${available}, need ${sendQty}).`);
+      return;
+    }
+
+    const { error } = await supabase.rpc(ADJUST_LOC_RPC, {
+      p_product_code: invProductCode,
+      p_location_id: sendFromLoc,
+      p_delta: -sendQty,       // -qty
+      p_reason: "send",
+      p_note: invNote || null,
+    });
+
+    if (error) {
+      setInvError(`Send failed: ${error.message}`);
+      return;
+    }
+
+    try {
+      await refreshOnHandGlobal(invProductCode);
+      await refreshLocBalances(invProductCode);
+    } catch (e: any) {
+      setInvError(`Send saved, but refresh failed: ${e.message}`);
+      return;
+    }
+
+    setInvSuccess("Inventory sent.");
+
+    // reset fields
+    setSendQty(1);
+    setSendFromLoc("");
+  };
+
+  const canReceive = !!invProductCode && !!receiveToLoc && receiveQty >= 1;
+  const canSend =
+    !!invProductCode &&
+    !!sendFromLoc &&
+    sendQty >= 1 &&
+    sendQty <= getOnHandAt(sendFromLoc);
 
 
 
@@ -131,6 +259,9 @@ export default function App() {
   const [fromLoc, setFromLoc] = useState<string>("");
   const [toLoc, setToLoc] = useState<string>("");
   const [moveQty, setMoveQty] = useState<number>(1);
+  const getOnHandAt = (locId: string) =>
+  (locBalances ?? []).find((x) => x.location_id === locId)?.on_hand ?? 0;
+
 
   type Location = {
     id: string;
@@ -196,36 +327,21 @@ export default function App() {
 
     loadLocations();
   }, [mode]);
-
+  
   useEffect(() => {
     if (mode !== "inventory") return;
+
     if (!invProductCode) {
       setLocBalances([]);
       return;
     }
-    if (invAction !== "move") return;
 
-    const loadLocBalances = async () => {
-      // If your LOC_ON_HAND_TABLE already includes location_code, use it directly:
-      const { data, error } = await supabase
-        .from(LOC_ON_HAND_TABLE)
-        .select("location_id, on_hand, locations_test(location_code)")
-        .eq("product_code", invProductCode)
-        .order("on_hand", { ascending: false });
-
-      if (!error) {
-        setLocBalances(
-          (data ?? []).map((r: any) => ({
-            location_id: r.location_id,
-            on_hand: r.on_hand,
-            location_code: r.locations_test?.location_code ?? r.location_id,
-          }))
-        );
-      }
-    };
-
-    loadLocBalances();
-  }, [mode, invProductCode, invAction]);
+    refreshLocBalances(invProductCode).catch((e: any) => {
+      console.error("refreshLocBalances failed:", e);
+      setLocBalances([]);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, invProductCode]);
 
 
   // Handle inventory search
@@ -1025,6 +1141,13 @@ export default function App() {
             {/* --- Below: product details & adjustments (only after product selected) --- */}
             {invProductCode ? (
               <div className={`p-5 space-y-4 ${surface}`}>
+                {/* Header row */}
+                <div className={`text-xs ${textMuted}`}>
+                  {movementType === "adjust" && "Adjust on-hand at a location (damage, recount, corrections)."}
+                  {movementType === "receive" && "Receive stock into a location (adds on-hand)."}
+                  {movementType === "send" && "Send stock out from a location (removes on-hand)."}
+                  {movementType === "transfer" && "Move stock between locations (total on-hand stays the same)."}
+                </div>
                 {/* Image */}
                 {invImageUrl && (
                   <img
@@ -1033,13 +1156,6 @@ export default function App() {
                     className="w-full rounded-xl border border-[#E8D9D9]"
                   />
                 )}
-                {/* Header row */}
-                <div className={`text-xs ${textMuted}`}>
-                  {movementType === "adjust" && "Adjust on-hand at a location (damage, recount, corrections)."}
-                  {movementType === "receive" && "Receive stock into a location (adds on-hand)."}
-                  {movementType === "send" && "Send stock out from a location (removes on-hand)."}
-                  {movementType === "transfer" && "Move stock between locations (total on-hand stays the same)."}
-                </div>
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <div className={`text-sm ${textMuted}`}>Product code</div>
@@ -1087,7 +1203,6 @@ export default function App() {
                     Adjust
                   </button>
                 </div>
-
 
 
                 {movementType === "adjust" && (
@@ -1248,7 +1363,7 @@ export default function App() {
                       className={btnBlue}
                       type="button"
                       onClick={submitReceive}  
-                      disabled={!receiveToLoc || receiveQty < 1}
+                      disabled={!canReceive}
                     >
                       Confirm receive
                     </button>
@@ -1312,7 +1427,7 @@ export default function App() {
                       className={btnBlue}
                       type="button"
                       onClick={submitSend}
-                      disabled={!sendFromLoc || sendQty < 1}
+                      disabled={!canSend}
                     >
                       Confirm send
                     </button>
