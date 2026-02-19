@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Html5Qrcode } from "html5-qrcode";
 import { supabase } from "./supabaseClient";
+import { useTranslation } from "react-i18next";
+
 
 type ScanViewResult = {
   productCode: string;
@@ -67,6 +69,8 @@ function isValidProductCodeFormat(code: string) {
 }
 
 export default function App() {
+
+  const { t, i18n } = useTranslation();
   const [sessionChecked, setSessionChecked] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
 
@@ -327,7 +331,7 @@ export default function App() {
 
     loadLocations();
   }, [mode]);
-  
+
   useEffect(() => {
     if (mode !== "inventory") return;
 
@@ -874,6 +878,12 @@ export default function App() {
       >
         <div className={`w-full max-w-sm p-5 space-y-3 ${surface}`}>
           <div className="flex flex-col items-center gap-3 mb-2">
+            <button
+              className={btnChip}
+              onClick={() => i18n.changeLanguage(i18n.language === "zh-CN" ? "en" : "zh-CN")}
+            >
+              {i18n.language === "zh-CN" ? "English" : "中文"}
+            </button>
             <div className="w-64 h-64 rounded-2xl overflow-hidden bg-white border border-[#E8D9D9]">
               <img
                 src="/logo.JPEG"
@@ -883,16 +893,16 @@ export default function App() {
             </div>
 
             <h2 className="text-xl font-semibold text-[#2B0909]">
-              Sign in
+              {t("sign_in")}
             </h2>
             <p className="text-xs text-[#5B4B4B] text-center">
-              Inventory management
+              {t("app_title")}
             </p>
           </div>
 
           <input
             className={inputStyle}
-            placeholder="Email"
+            placeholder={t("email")}
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             autoCapitalize="none"
@@ -900,14 +910,14 @@ export default function App() {
           />
           <input
             className={inputStyle}
-            placeholder="Password"
+            placeholder={t("password")}
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
           />
 
           <button className={btnPrimary} onClick={handleLogin}>
-            Continue
+            {t("continue")}
           </button>
 
           {authError && (
@@ -933,6 +943,12 @@ export default function App() {
           <span className="text-xs text-[#5B4B4B]">
             {isOnline ? "Online" : "Offline"}
           </span>
+          <button
+            className={btnChip}
+            onClick={() => i18n.changeLanguage(i18n.language === "zh-CN" ? "en" : "zh-CN")}
+          >
+            {i18n.language === "zh-CN" ? "English" : "中文"}
+          </button>
         </div>
         <div className="flex items-center gap-3 mb-4 p-3 rounded-xl bg-white border border-[#E8D9D9]">
           <img
@@ -943,10 +959,10 @@ export default function App() {
 
           <div className="flex-1">
             <div className="text-base font-semibold text-[#2B0909]">
-              Inventory Manager
+              {t("Inventory Manager")}
             </div>
             <div className="text-xs text-[#5B4B4B]">
-              Scan • Search • Adjust
+              {t("Scan • Search • Adjust")}
             </div>
           </div>
         </div>        
@@ -972,7 +988,7 @@ export default function App() {
               </button>
             )}
             <button className={btnChip} onClick={handleLogout}>
-              Sign out
+              {t("Sign out")}
             </button>
           </div>
         </div>
@@ -990,7 +1006,7 @@ export default function App() {
                 setAutoStartMode("scan");
               }}
             >
-              Lookup (view product)
+              {t("lookup_view_product")}
             </button>
             <button
               className={btnPrimary}
@@ -1000,7 +1016,7 @@ export default function App() {
                 setInvEntry("search");
               }}
             >
-              Inventory Movements (adjust counts)
+              {t("inventory_movements")}
             </button>
             <p className={`text-sm ${textMuted}`}>
               Use Lookup to preview product photos. Use Inventory Movements to adjust levels
@@ -1063,7 +1079,7 @@ export default function App() {
               <div className={`p-5 space-y-3 ${surface}`}>
                 <div className="flex items-center justify-between">
                   <div>
-                    <div className="text-base font-semibold">Manual lookup</div>
+                    <div className="text-base font-semibold">{t("manual_lookup")}</div>
                     <div className={`text-xs ${textMuted}`}>
                       Enter a product code like RB-10-02-16
                     </div>
@@ -1106,7 +1122,7 @@ export default function App() {
               {/* Camera scan container */}
               <div className={`p-5 space-y-3 ${surface}`}>
                 <div>
-                  <div className="text-base font-semibold">Camera scan</div>
+                  <div className="text-base font-semibold">{t("camera_scan")}</div>
                   <div className={`text-xs ${textMuted}`}>
                     Scan the QR label to load the product
                   </div>
@@ -1176,7 +1192,7 @@ export default function App() {
                     className={movementType === "receive" ? btnToggleActive : btnToggleInactive}
                     onClick={() => { setMovementType("receive"); setInvError(null); setInvSuccess(null); }}
                   >
-                    Receive
+                    {t("receive")}
                   </button>
 
                   <button
@@ -1184,7 +1200,7 @@ export default function App() {
                     className={movementType === "send" ? btnToggleActive : btnToggleInactive}
                     onClick={() => { setMovementType("send"); setInvError(null); setInvSuccess(null); }}
                   >
-                    Send
+                    {t("send")}
                   </button>
 
                   <button
@@ -1192,7 +1208,7 @@ export default function App() {
                     className={movementType === "transfer" ? btnToggleActive : btnToggleInactive}
                     onClick={() => { setMovementType("transfer"); setInvError(null); setInvSuccess(null); }}
                   >
-                    Transfer
+                    {t("transfer")}
                   </button>
 
                   <button
@@ -1200,7 +1216,7 @@ export default function App() {
                     className={movementType === "adjust" ? btnToggleActive : btnToggleInactive}
                     onClick={() => { setMovementType("adjust"); setInvError(null); setInvSuccess(null); }}
                   >
-                    Adjust
+                    {t("adjust")}
                   </button>
                 </div>
 
@@ -1210,7 +1226,7 @@ export default function App() {
                     {/* Adjustment Location */}
                     <div className="grid grid-cols-2 gap-2">
                       <div className="col-span-2">
-                        <div className={`text-xs ${textMuted} mb-1`}>Location</div>
+                        <div className={`text-xs ${textMuted} mb-1`}>{t("location")}</div>
                         <select
                           className={inputStyle}
                           value={adjustLoc}
@@ -1326,7 +1342,7 @@ export default function App() {
 
                     {/* Submit */}
                     <button className={btnBlue} onClick={submitAdjustment} disabled={!canSubmit}>
-                      Confirm change
+                      {t("confirm_change")}
                     </button>
                   </>
                 )}
@@ -1334,7 +1350,7 @@ export default function App() {
                 {movementType === "receive" && (
                   <div className="space-y-3">
                     <div>
-                      <div className={`text-xs ${textMuted} mb-1`}>To location</div>
+                      <div className={`text-xs ${textMuted} mb-1`}>{t("to_location")}</div>
                       <select
                         className={inputStyle}
                         value={receiveToLoc}
@@ -1349,7 +1365,7 @@ export default function App() {
                     </div>
 
                     <div>
-                      <div className={`text-xs ${textMuted} mb-1`}>Quantity</div>
+                      <div className={`text-xs ${textMuted} mb-1`}>{t("qty")}</div>
                       <input
                         className={inputStyle}
                         type="number"
@@ -1365,7 +1381,7 @@ export default function App() {
                       onClick={submitReceive}  
                       disabled={!canReceive}
                     >
-                      Confirm receive
+                      {t("confirm_receive")}
                     </button>
                   </div>
                 )}
@@ -1374,9 +1390,9 @@ export default function App() {
                   <div className="space-y-3">
                     {/* Optional: show balances like your “Where it is” panel */}
                     <div className="rounded-xl border border-[#E8D9D9] bg-white p-3">
-                      <div className="text-sm font-semibold text-[#111111]">Available by location</div>
+                      <div className="text-sm font-semibold text-[#111111]">{t("available_by_location")}</div>
                       {locBalances.length === 0 ? (
-                        <div className="text-sm text-[#5B4B4B] mt-1">No stock recorded in any location.</div>
+                        <div className="text-sm text-[#5B4B4B] mt-1">{t("no_stock_any_location")}</div>
                       ) : (
                         <div className="mt-2 space-y-2">
                           {locBalances
@@ -1413,7 +1429,7 @@ export default function App() {
                     </div>
 
                     <div>
-                      <div className={`text-xs ${textMuted} mb-1`}>Quantity</div>
+                      <div className={`text-xs ${textMuted} mb-1`}> {t("qty")}</div>
                       <input
                         className={inputStyle}
                         type="number"
@@ -1429,7 +1445,7 @@ export default function App() {
                       onClick={submitSend}
                       disabled={!canSend}
                     >
-                      Confirm send
+                      {t("confirm_send")}
                     </button>
                   </div>
                 )}
@@ -1438,10 +1454,10 @@ export default function App() {
                   <div className="space-y-3">
                     {/* Where it is now */}
                     <div className="rounded-xl border border-[#E8D9D9] bg-white p-3">
-                      <div className="text-sm font-semibold text-[#111111]">Where it is</div>
+                      <div className="text-sm font-semibold text-[#111111]">{t("availability")}</div>
 
                       {locBalances.length === 0 ? (
-                        <div className="text-sm text-[#5B4B4B] mt-1">No stock recorded in any location.</div>
+                        <div className="text-sm text-[#5B4B4B] mt-1">{t("no_stock_any_location")}</div>
                       ) : (
                         <div className="mt-2 space-y-2">
                           {locBalances
@@ -1459,7 +1475,7 @@ export default function App() {
 
                     {/* Recent moves */}
                     <div className="rounded-xl border border-[#E8D9D9] bg-white p-3">
-                      <div className="text-sm font-semibold text-[#111111]">Recent moves</div>
+                      <div className="text-sm font-semibold text-[#111111]">{t("recent_activities")}</div>
 
                       {invMoves.length === 0 ? (
                         <div className="text-sm text-[#5B4B4B] mt-1">No moves yet.</div>
@@ -1544,7 +1560,7 @@ export default function App() {
 
 
                     <div>
-                      <div className={`text-xs ${textMuted} mb-1`}>Quantity</div>
+                      <div className={`text-xs ${textMuted} mb-1`}>{t("qty")}</div>
                       <input
                         className={inputStyle}
                         type="number"
@@ -1560,7 +1576,7 @@ export default function App() {
                       onClick={submitMove}
                       disabled={!fromLoc || !toLoc || fromLoc === toLoc || moveQty < 1}
                     >
-                      Confirm move
+                      {t("confirm_move")}
                     </button>
                   </div>
                 )}
