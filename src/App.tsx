@@ -114,9 +114,9 @@ export default function App() {
   const [movementType, setMovementType] = useState<MovementType>("receive");
 
   const [adjustLoc, setAdjustLoc] = useState("");
-  const [receiveToLoc, setReceiveToLoc] = useState("");
+  const [receiveToLoc, setReceiveToLoc] = useState<string>("");
   const [receiveQty, setReceiveQty] = useState(1);
-  const [sendFromLoc, setSendFromLoc] = useState("");
+  const [sendFromLoc, setSendFromLoc] = useState<string>("");
   const [sendQty, setSendQty] = useState(1);
 
   // Shared refreshers for inventory changes
@@ -244,7 +244,23 @@ export default function App() {
     setSendFromLoc("");
   };
 
+
+
+  // Location tracking 
   const canReceive = !!invProductCode && !!receiveToLoc && receiveQty >= 1;
+  const [locBalances, setLocBalances] = useState<{
+    location_id: string;
+    on_hand: number;
+    location_code?: string;
+  }[]>([]);
+
+  
+  const getOnHandAt = (locationId: string) => {
+    if (!locationId) return 0;
+    const row = (locBalances ?? []).find((x) => x.location_id === locationId);
+    return Number(row?.on_hand ?? 0);
+  };
+
   const canSend =
     !!invProductCode &&
     !!sendFromLoc &&
@@ -253,18 +269,10 @@ export default function App() {
 
 
 
-  // Location tracking 
-  const [locBalances, setLocBalances] = useState<{
-    location_id: string;
-    on_hand: number;
-    location_code?: string;
-  }[]>([]);
-
   const [fromLoc, setFromLoc] = useState<string>("");
   const [toLoc, setToLoc] = useState<string>("");
   const [moveQty, setMoveQty] = useState<number>(1);
-  const getOnHandAt = (locId: string) =>
-  (locBalances ?? []).find((x) => x.location_id === locId)?.on_hand ?? 0;
+
 
 
   type Location = {
@@ -1223,6 +1231,26 @@ export default function App() {
 
                 {movementType === "adjust" && (
                   <>
+                    {/* Where it is*/}
+                    <div className="rounded-xl border border-[#E8D9D9] bg-white p-3">
+                      <div className="text-sm font-semibold text-[#111111]">{t("availability")}</div>
+
+                      {locBalances.length === 0 ? (
+                        <div className="text-sm text-[#5B4B4B] mt-1">{t("no_stock_any_location")}</div>
+                      ) : (
+                        <div className="mt-2 space-y-2">
+                          {locBalances
+                            .filter((x) => x.on_hand > 0)
+                            .sort((a, b) => b.on_hand - a.on_hand)
+                            .map((x) => (
+                              <div key={x.location_id} className="flex items-center justify-between">
+                                <div className="text-sm text-[#111111]">{x.location_code ?? x.location_id}</div>
+                                <div className="text-sm font-semibold">{x.on_hand}</div>
+                              </div>
+                            ))}
+                        </div>
+                      )}
+                    </div>
                     {/* Adjustment Location */}
                     <div className="grid grid-cols-2 gap-2">
                       <div className="col-span-2">
@@ -1349,6 +1377,26 @@ export default function App() {
                 
                 {movementType === "receive" && (
                   <div className="space-y-3">
+                    {/* Where it is now */}
+                    <div className="rounded-xl border border-[#E8D9D9] bg-white p-3">
+                      <div className="text-sm font-semibold text-[#111111]">{t("availability")}</div>
+
+                      {locBalances.length === 0 ? (
+                        <div className="text-sm text-[#5B4B4B] mt-1">{t("no_stock_any_location")}</div>
+                      ) : (
+                        <div className="mt-2 space-y-2">
+                          {locBalances
+                            .filter((x) => x.on_hand > 0)
+                            .sort((a, b) => b.on_hand - a.on_hand)
+                            .map((x) => (
+                              <div key={x.location_id} className="flex items-center justify-between">
+                                <div className="text-sm text-[#111111]">{x.location_code ?? x.location_id}</div>
+                                <div className="text-sm font-semibold">{x.on_hand}</div>
+                              </div>
+                            ))}
+                        </div>
+                      )}
+                    </div>
                     <div>
                       <div className={`text-xs ${textMuted} mb-1`}>{t("to_location")}</div>
                       <select
@@ -1388,9 +1436,9 @@ export default function App() {
 
                 {movementType === "send" && (
                   <div className="space-y-3">
-                    {/* Optional: show balances like your “Where it is” panel */}
+                    {/* show balances like “Where it is” panel */}
                     <div className="rounded-xl border border-[#E8D9D9] bg-white p-3">
-                      <div className="text-sm font-semibold text-[#111111]">{t("available_by_location")}</div>
+                      <div className="text-sm font-semibold text-[#111111]">{t("availability")}</div>
                       {locBalances.length === 0 ? (
                         <div className="text-sm text-[#5B4B4B] mt-1">{t("no_stock_any_location")}</div>
                       ) : (
@@ -1412,8 +1460,8 @@ export default function App() {
                       <div className={`text-xs ${textMuted} mb-1`}>From location</div>
                       <select
                         className={inputStyle}
-                        value={sendFromLoc}
-                        onChange={(e) => setSendFromLoc(e.target.value)}
+                        value={sendFromLoc ?? ""}
+                        onChange={(e) => setSendFromLoc(e.target.value || "")}
                         disabled={(locBalances ?? []).filter((x) => Number(x.on_hand ?? 0) > 0).length === 0}
                       >
                         <option value="">Select location</option>
