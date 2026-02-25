@@ -254,7 +254,7 @@ export default function App() {
     location_code?: string;
   }[]>([]);
 
-  
+
   const getOnHandAt = (locationId: string) => {
     if (!locationId) return 0;
     const row = (locBalances ?? []).find((x) => x.location_id === locationId);
@@ -304,6 +304,36 @@ export default function App() {
 
   // flag state for Scan mode
   const [autoStartMode, setAutoStartMode] = useState<"scan" | "inventory" | null>(null);
+
+
+  // Cart mode
+  type CartLine = {
+    product_code: string;
+    qty: number;
+    image_url?: string;
+    on_hand?: number | null; // optional cache
+  };
+
+  const [batchMode, setBatchMode] = useState(true);
+  const [cartLines, setCartLines] = useState<CartLine[]>([]);
+  const [activeCode, setActiveCode] = useState<string | null>(null);
+
+  function addToCart(code: string) {
+    const normalized = code.trim().toUpperCase();
+    setActiveCode(normalized);
+
+    setCartLines((prev) => {
+      const idx = prev.findIndex((x) => x.product_code === normalized);
+      if (idx >= 0) {
+        const copy = [...prev];
+        copy[idx] = { ...copy[idx], qty: copy[idx].qty + 1 };
+        return copy;
+      }
+      return [{ product_code: normalized, qty: 1 }, ...prev];
+    });
+  }
+
+  const hasSelection = batchMode ? cartLines.length > 0 : !!invProductCode;
 
   // handles Scan mode scan after render
   useEffect(() => {
@@ -1163,6 +1193,7 @@ export default function App() {
             </div>
 
             {/* --- Below: product details & adjustments (only after product selected) --- */}
+
             {invProductCode ? (
               <div className={`p-5 space-y-4 ${surface}`}>
                 {/* Header row */}
@@ -1193,6 +1224,80 @@ export default function App() {
                     </div>
                   </div>
                 </div>
+                {/* Batch Mode*/}
+                {batchMode && (
+                  <div className="rounded-xl border border-[#E8D9D9] bg-white p-3">
+                    <div className="flex items-center justify-between">
+                      <div className="text-sm font-semibold text-[#111111]">Cart</div>
+                      <button
+                        type="button"
+                        className="text-xs underline text-[#5B4B4B]"
+                        onClick={() => setCartLines([])}
+                      >
+                        Clear
+                      </button>
+                    </div>
+
+                    {cartLines.length === 0 ? (
+                      <div className="text-sm text-[#5B4B4B] mt-1">Scan items to add them here.</div>
+                    ) : (
+                      <div className="mt-2 space-y-2">
+                        {cartLines.map((line) => (
+                          <div key={line.product_code} className="flex items-center justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className="text-sm font-semibold truncate">{line.product_code}</div>
+                            </div>
+
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                className="rounded-lg px-2 py-1 border border-[#E8D9D9] bg-white"
+                                onClick={() =>
+                                  setCartLines((prev) =>
+                                    prev
+                                      .map((x) =>
+                                        x.product_code === line.product_code
+                                          ? { ...x, qty: Math.max(1, x.qty - 1) }
+                                          : x
+                                      )
+                                  )
+                                }
+                              >
+                                –
+                              </button>
+
+                              <div className="w-8 text-center font-semibold">{line.qty}</div>
+
+                              <button
+                                type="button"
+                                className="rounded-lg px-2 py-1 border border-[#E8D9D9] bg-white"
+                                onClick={() =>
+                                  setCartLines((prev) =>
+                                    prev.map((x) =>
+                                      x.product_code === line.product_code ? { ...x, qty: x.qty + 1 } : x
+                                    )
+                                  )
+                                }
+                              >
+                                +
+                              </button>
+
+                              <button
+                                type="button"
+                                className="text-xs underline text-[#B42318]"
+                                onClick={() =>
+                                  setCartLines((prev) => prev.filter((x) => x.product_code !== line.product_code))
+                                }
+                              >
+                                Remove
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
                 {/* Movement tabs switch */}
                 <div className="flex gap-2 flex-wrap">
                   <button
@@ -1222,8 +1327,12 @@ export default function App() {
                   <button
                     type="button"
                     className={movementType === "adjust" ? btnToggleActive : btnToggleInactive}
-                    onClick={() => { setMovementType("adjust"); setInvError(null); setInvSuccess(null); }}
-                  >
+                    onClick={() => {
+                      if (batchMode) return; // or auto-switch batchMode off
+                      setMovementType("adjust");
+                      setInvError(null); setInvSuccess(null);
+                    }}
+                  > 
                     {t("adjust")}
                   </button>
                 </div>
@@ -1412,16 +1521,27 @@ export default function App() {
                       </select>
                     </div>
 
-                    <div>
-                      <div className={`text-xs ${textMuted} mb-1`}>{t("qty")}</div>
-                      <input
-                        className={inputStyle}
-                        type="number"
-                        min={1}
-                        value={receiveQty}
-                        onChange={(e) => setReceiveQty(Math.max(1, Number(e.target.value) || 1))}
-                      />
-                    </div>
+                    {!batchMode ? (
+                      <div>
+                        <div className={`text-xs ${textMuted} mb-1`}>{t("qty")}</div>
+                        <input
+                          className={inputStyle}
+                          type="number"
+                          min={1}
+                          value={receiveQty}
+                          onChange={(e) => setReceiveQty(Math.max(1, Number(e.target.value) || 1))}
+                        />
+                      </div>
+                    ) : (
+                      <div className="text-xs text-[#5B4B4B]">
+                        Total units:{" "}
+                        <span className="font-semibold">
+                          {cartLines.reduce((s, x) => s + x.qty, 0)}
+                        </span>
+                        {" · "}
+                        Lines: <span className="font-semibold">{cartLines.length}</span>
+                      </div>
+                    )}
 
                     <button
                       className={btnBlue}
@@ -1475,17 +1595,27 @@ export default function App() {
                           ))}
                       </select>
                     </div>
-
-                    <div>
-                      <div className={`text-xs ${textMuted} mb-1`}> {t("qty")}</div>
-                      <input
-                        className={inputStyle}
-                        type="number"
-                        min={1}
-                        value={sendQty}
-                        onChange={(e) => setSendQty(Math.max(1, Number(e.target.value) || 1))}
-                      />
-                    </div>
+                    {!batchMode ? (
+                      <div>
+                        <div className={`text-xs ${textMuted} mb-1`}> {t("qty")}</div>
+                        <input
+                          className={inputStyle}
+                          type="number"
+                          min={1}
+                          value={sendQty}
+                          onChange={(e) => setSendQty(Math.max(1, Number(e.target.value) || 1))}
+                        />
+                      </div>
+                    ) : (
+                      <div className="text-xs text-[#5B4B4B]">
+                        Total units:{" "}
+                        <span className="font-semibold">
+                          {cartLines.reduce((s, x) => s + x.qty, 0)}
+                        </span>
+                        {" · "}
+                        Lines: <span className="font-semibold">{cartLines.length}</span>
+                      </div>
+                    )}
 
                     <button
                       className={btnBlue}
