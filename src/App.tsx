@@ -36,10 +36,10 @@ const ADJUST_RPC = "adjust_inventory_test";
 
 const LOCATIONS_TABLE = "locations_test";
 const LOC_ON_HAND_TABLE = "inventory_on_hand_by_location_test";
-const MOVE_RPC = "move_inventory_test";
+// const MOVE_RPC = "move_inventory_test";
 const MOVEMENTS_TABLE = "inventory_movements_test"; // optional if you want to show recent moves
 const ADJUST_LOC_RPC = "adjust_inventory_by_location_test"; // you’ll create in Supabase
-const LOC_ADJUSTMENTS_TABLE = "inventory_adjustments_by_location_test"; // ledger
+// const LOC_ADJUSTMENTS_TABLE = "inventory_adjustments_by_location_test"; // ledger
 
 
 
@@ -105,9 +105,15 @@ export default function App() {
   const [invSearchCode, setInvSearchCode] = useState("");
   const [invSearchError, setInvSearchError] = useState<string | null>(null);
   const [invSearchBusy, setInvSearchBusy] = useState(false);
+  const invReqRef = useRef(0);
 
-  const [invAction, setInvAction] = useState("adjust"); // "adjust" | "move"
+  // const [invAction, setInvAction] = useState("adjust"); // "adjust" | "move"
 
+  // Batch Mode 
+  const invScanBusyRef = useRef(false);
+  const lastScanRef = useRef<{ code: string; ts: number }>({ code: "", ts: 0 });
+
+  
 
   // New tabs within inventory mode 2-16-2026
   type MovementType = "receive" | "send" | "transfer" | "adjust";
@@ -151,6 +157,25 @@ export default function App() {
 
 
   // Submit Receive
+
+  const receiveSingleLine = async (productCode: string, qty: number, toLoc: string) => {
+    const code = (productCode || "").trim().toUpperCase();
+    const q = Math.max(1, Number(qty) || 1);
+
+    if (!code) throw new Error("Missing product code.");
+    if (!toLoc) throw new Error("Missing To location.");
+
+    const { error } = await supabase.rpc(ADJUST_LOC_RPC, {
+      p_product_code: code,
+      p_location_id: toLoc,
+      p_delta: q,
+      p_reason: "receive",
+      p_note: invNote || null,
+    });
+
+    if (error) throw new Error(error.message);
+  };
+
   const submitReceive = async () => {
     setInvError(null);
     setInvSuccess(null);
@@ -166,35 +191,83 @@ export default function App() {
       return;
     }
 
-    const { error } = await supabase.rpc(ADJUST_LOC_RPC, {
-      p_product_code: invProductCode,
-      p_location_id: receiveToLoc,
-      p_delta: receiveQty,     // +qty
-      p_reason: "receive",
-      p_note: invNote || null,
-    });
-
-    if (error) {
-      setInvError(`Receive failed: ${error.message}`);
-      return;
-    }
-
     try {
+      await receiveSingleLine(invProductCode, receiveQty, receiveToLoc);
+
       await refreshOnHandGlobal(invProductCode);
       await refreshLocBalances(invProductCode);
+
+      setInvSuccess("Inventory received.");
+
+      setReceiveQty(1);
+      setReceiveToLoc("");
     } catch (e: any) {
-      setInvError(`Receive saved, but refresh failed: ${e.message}`);
-      return;
+      setInvError(`Receive failed: ${e?.message ?? "Unknown error"}`);
     }
-
-    setInvSuccess("Inventory received.");
-
-    // reset fields
-    setReceiveQty(1);
-    setReceiveToLoc("");
   };
 
-  // Submit Send 
+  const submitReceiveBatch = async () => {
+    setInvError(null);
+    setInvSuccess(null);
+
+    if (!receiveToLoc) return setInvError("Receive failed: select a To location.");
+    if (!cartLines.length) return setInvError("Receive failed: cart is empty.");
+
+    setInvSubmitting(true);
+    const failed: { product_code: string; qty: number; error: string }[] = [];
+
+    try {
+      for (const line of cartLines) {
+        try {
+          await receiveSingleLine(line.product_code, line.qty, receiveToLoc);
+        } catch (e: any) {
+          failed.push({ product_code: line.product_code, qty: line.qty, error: e?.message ?? "Unknown error" });
+        }
+      }
+
+      if (failed.length) {
+        setInvError("Some items failed:\n" + failed.map((f) => `${f.product_code} ×${f.qty}: ${f.error}`).join("\n"));
+        setCartLines(failed.map((f) => ({ product_code: f.product_code, qty: f.qty })));
+        return;
+      }
+
+      const previewCode = activeCode || invProductCode;
+      if (previewCode) {
+        await refreshOnHandGlobal(previewCode);
+        await refreshLocBalances(previewCode);
+      }
+
+      setInvSuccess(`Batch receive complete: ${cartTotalUnits} unit(s), ${cartLines.length} item(s).`);
+      clearCart();
+      setReceiveQty(1);
+      setReceiveToLoc("");
+    } catch (e: any) {
+      setInvError(`Batch receive failed: ${e?.message ?? "Unknown error"}`);
+    } finally {
+      setInvSubmitting(false);
+    }
+  };
+
+  // Submit Send
+  const sendSingleLine = async (productCode: string, qty: number, fromLoc: string) => {
+    const code = (productCode || "").trim().toUpperCase();
+    const q = Math.max(1, Number(qty) || 1);
+    if (!code) throw new Error("Missing product code.");
+    if (!fromLoc) throw new Error("Missing From location.");
+
+    const available = getOnHandAt(fromLoc);
+    if (q > available) throw new Error(`Insufficient stock at this location (have ${available}, need ${q}).`);
+
+    const { error } = await supabase.rpc(ADJUST_LOC_RPC, {
+      p_product_code: code,
+      p_location_id: fromLoc,
+      p_delta: -q,
+      p_reason: "send",
+      p_note: invNote || null,
+    });
+    if (error) throw new Error(error.message);
+  };
+
   const submitSend = async () => {
     setInvError(null);
     setInvSuccess(null);
@@ -210,40 +283,172 @@ export default function App() {
       return;
     }
 
-    const available = getOnHandAt(sendFromLoc);
-    if (sendQty > available) {
-      setInvError(`Send failed: insufficient stock at this location (have ${available}, need ${sendQty}).`);
-      return;
-    }
+    try {
+      await sendSingleLine(invProductCode, sendQty, sendFromLoc);
 
-    const { error } = await supabase.rpc(ADJUST_LOC_RPC, {
-      p_product_code: invProductCode,
-      p_location_id: sendFromLoc,
-      p_delta: -sendQty,       // -qty
-      p_reason: "send",
+      await refreshOnHandGlobal(invProductCode);
+      await refreshLocBalances(invProductCode);
+
+      setInvSuccess("Inventory sent.");
+
+      setSendQty(1);
+      setSendFromLoc("");
+    } catch (e: any) {
+      setInvError(`Send failed: ${e?.message ?? "Unknown error"}`);
+    }
+  };
+
+  const submitSendBatch = async () => {
+    setInvError(null);
+    setInvSuccess(null);
+
+    if (!sendFromLoc) return setInvError("Send failed: select a From location.");
+    if (!cartLines.length) return setInvError("Send failed: cart is empty.");
+
+    setInvSubmitting(true);
+    const failed: { product_code: string; qty: number; error: string }[] = [];
+
+    try {
+      for (const line of cartLines) {
+        try {
+          await sendSingleLine(line.product_code, line.qty, sendFromLoc);
+        } catch (e: any) {
+          failed.push({ product_code: line.product_code, qty: line.qty, error: e?.message ?? "Unknown error" });
+        }
+      }
+
+      if (failed.length) {
+        setInvError("Some items failed:\n" + failed.map((f) => `${f.product_code} ×${f.qty}: ${f.error}`).join("\n"));
+        setCartLines(failed.map((f) => ({ product_code: f.product_code, qty: f.qty })));
+        return;
+      }
+
+      const previewCode = activeCode || invProductCode;
+      if (previewCode) {
+        await refreshOnHandGlobal(previewCode);
+        await refreshLocBalances(previewCode);
+      }
+
+      setInvSuccess(`Batch send complete: ${cartTotalUnits} unit(s), ${cartLines.length} item(s).`);
+      clearCart();
+      setSendQty(1);
+      setSendFromLoc("");
+    } catch (e: any) {
+      setInvError(`Batch send failed: ${e?.message ?? "Unknown error"}`);
+    } finally {
+      setInvSubmitting(false);
+    }
+  };
+
+  // Moving inventory
+  const transferSingleLine = async (productCode: string, qty: number, fromLocationId: string, toLocationId: string) => {
+    const code = (productCode || "").trim().toUpperCase();
+    const q = Math.max(1, Number(qty) || 1);
+    if (!code) throw new Error("Missing product code.");
+    if (!fromLocationId || !toLocationId) throw new Error("Missing From/To location.");
+    if (fromLocationId === toLocationId) throw new Error("From and To cannot be the same location.");
+
+    const available = getOnHandAt(fromLocationId);
+    if (q > available) throw new Error(`Insufficient stock at From location (have ${available}, need ${q}).`);
+
+    const out1 = await supabase.rpc(ADJUST_LOC_RPC, {
+      p_product_code: code,
+      p_location_id: fromLocationId,
+      p_delta: -q,
+      p_reason: "transfer_out",
       p_note: invNote || null,
     });
+    if (out1.error) throw new Error(out1.error.message);
 
-    if (error) {
-      setInvError(`Send failed: ${error.message}`);
+    const in1 = await supabase.rpc(ADJUST_LOC_RPC, {
+      p_product_code: code,
+      p_location_id: toLocationId,
+      p_delta: q,
+      p_reason: "transfer_in",
+      p_note: invNote || null,
+    });
+    if (in1.error) throw new Error(in1.error.message);
+  };
+
+
+  const submitMove = async () => {
+    setInvError(null);
+    setInvSuccess(null);
+
+    if (!invProductCode) return;
+
+    if (!fromLoc || !toLoc) {
+      setInvError("Move failed: select both From and To locations.");
+      return;
+    }
+    if (fromLoc === toLoc) {
+      setInvError("Move failed: From and To cannot be the same location.");
+      return;
+    }
+    if (!moveQty || moveQty <= 0) {
+      setInvError("Move failed: quantity must be at least 1.");
       return;
     }
 
     try {
+      await transferSingleLine(invProductCode, moveQty, fromLoc, toLoc);
+
       await refreshOnHandGlobal(invProductCode);
       await refreshLocBalances(invProductCode);
+
+      setInvSuccess("Inventory moved.");
+
+      setMoveQty(1);
+      setFromLoc("");
+      setToLoc("");
     } catch (e: any) {
-      setInvError(`Send saved, but refresh failed: ${e.message}`);
-      return;
+      setInvError(`Move failed: ${e?.message ?? "Unknown error"}`);
     }
-
-    setInvSuccess("Inventory sent.");
-
-    // reset fields
-    setSendQty(1);
-    setSendFromLoc("");
   };
 
+  const submitTransferBatch = async () => {
+    setInvError(null);
+    setInvSuccess(null);
+
+    if (!fromLoc || !toLoc) return setInvError("Transfer failed: select both From and To locations.");
+    if (fromLoc === toLoc) return setInvError("Transfer failed: From and To cannot be the same location.");
+    if (!cartLines.length) return setInvError("Transfer failed: cart is empty.");
+
+    setInvSubmitting(true);
+    const failed: { product_code: string; qty: number; error: string }[] = [];
+
+    try {
+      for (const line of cartLines) {
+        try {
+          await transferSingleLine(line.product_code, line.qty, fromLoc, toLoc);
+        } catch (e: any) {
+          failed.push({ product_code: line.product_code, qty: line.qty, error: e?.message ?? "Unknown error" });
+        }
+      }
+
+      if (failed.length) {
+        setInvError("Some items failed:\n" + failed.map((f) => `${f.product_code} ×${f.qty}: ${f.error}`).join("\n"));
+        setCartLines(failed.map((f) => ({ product_code: f.product_code, qty: f.qty })));
+        return;
+      }
+
+      const previewCode = activeCode || invProductCode;
+      if (previewCode) {
+        await refreshOnHandGlobal(previewCode);
+        await refreshLocBalances(previewCode);
+      }
+
+      setInvSuccess(`Batch transfer complete: ${cartTotalUnits} unit(s), ${cartLines.length} item(s).`);
+      clearCart();
+      setMoveQty(1);
+      setFromLoc("");
+      setToLoc("");
+    } catch (e: any) {
+      setInvError(`Batch transfer failed: ${e?.message ?? "Unknown error"}`);
+    } finally {
+      setInvSubmitting(false);
+    }
+  };
 
 
   // Location tracking 
@@ -309,31 +514,43 @@ export default function App() {
   // Cart mode
   type CartLine = {
     product_code: string;
-    qty: number;
-    image_url?: string;
-    on_hand?: number | null; // optional cache
+    qty: number
   };
 
-  const [batchMode, setBatchMode] = useState(true);
+  const [batchMode, setBatchMode] = useState(false);
   const [cartLines, setCartLines] = useState<CartLine[]>([]);
   const [activeCode, setActiveCode] = useState<string | null>(null);
+  const [invSubmitting, setInvSubmitting] = useState(false);
 
-  function addToCart(code: string) {
-    const normalized = code.trim().toUpperCase();
-    setActiveCode(normalized);
+  const addToCart = (codeRaw: string) => {
+    const code = (codeRaw || "").trim().toUpperCase();
+    if (!code) return;
+
+    setActiveCode(code);
 
     setCartLines((prev) => {
-      const idx = prev.findIndex((x) => x.product_code === normalized);
+      const idx = prev.findIndex((x) => x.product_code === code);
       if (idx >= 0) {
         const copy = [...prev];
         copy[idx] = { ...copy[idx], qty: copy[idx].qty + 1 };
         return copy;
       }
-      return [{ product_code: normalized, qty: 1 }, ...prev];
+      return [{ product_code: code, qty: 1 }, ...prev];
     });
-  }
+  };
 
-  const hasSelection = batchMode ? cartLines.length > 0 : !!invProductCode;
+  const updateCartQty = (code: string, qty: number) => {
+    const q = Math.max(1, Number(qty) || 1);
+    setCartLines((prev) => prev.map((x) => (x.product_code === code ? { ...x, qty: q } : x)));
+  };
+
+  const removeFromCart = (code: string) => {
+    setCartLines((prev) => prev.filter((x) => x.product_code !== code));
+  };
+
+  const clearCart = () => setCartLines([]);
+
+  const cartTotalUnits = cartLines.reduce((s, x) => s + (Number(x.qty) || 0), 0);
 
   // handles Scan mode scan after render
   useEffect(() => {
@@ -397,7 +614,7 @@ export default function App() {
         return;
       }
 
-      const productCode = normalizeProductCode(raw);
+      const productCode = normalizeProductCode(raw).toUpperCase();
 
       if (!isValidProductCodeFormat(productCode)) {
         setInvSearchError(
@@ -596,15 +813,35 @@ export default function App() {
         { facingMode: "environment" },
         { fps: 10, qrbox: { width: 250, height: 250 } },
         async (decodedText) => {
-          const productCode = normalizeProductCode(decodedText);
+          const productCode = normalizeProductCode(decodedText).trim().toUpperCase();
 
-          if (targetMode === "scan") {
-            await handleScanMode(productCode);
-          } else {
-            await handleInventoryModeScan(productCode);
+          // Debounce duplicates (QR keeps firing same code)
+          const now = Date.now();
+          const last = lastScanRef.current;
+          if (last.code === productCode && now - last.ts < 900) return;
+          lastScanRef.current = { code: productCode, ts: now };
+
+          // Prevent overlapping async loads
+          if (invScanBusyRef.current) return;
+          invScanBusyRef.current = true;
+
+          try {
+            if (targetMode === "scan") {
+              await handleScanMode(productCode);
+              await stopScan(); // scan mode = one-and-done
+            } else {
+              // inventory mode
+              await handleInventoryModeScan(productCode);
+
+              // ✅ Only stop camera if NOT batch mode
+              if (!batchMode) {
+                await stopScan();
+              }
+              // If batchMode is true, keep scanning
+            }
+          } finally {
+            invScanBusyRef.current = false;
           }
-
-          await stopScan();
         },
         () => {}
       );
@@ -649,6 +886,9 @@ export default function App() {
   };
 
   const handleInventoryModeScan = async (productCode: string) => {
+    const code = productCode.trim().toUpperCase();
+    const reqId = ++invReqRef.current;
+
     setInvSearchError(null);
     setInvSearchCode(productCode);
     setInvProductCode(productCode);
@@ -660,7 +900,9 @@ export default function App() {
     setInvImageUrl(null);
     setInvAdjustments([]);
 
-
+    if (batchMode) {
+      addToCart(code);
+    }
 
     // 1) Confirm product exists (optional but helpful)
     const { data: prod, error: prodErr } = await supabase
@@ -669,6 +911,8 @@ export default function App() {
       .eq("product_code", productCode)
       .maybeSingle();
 
+    if (reqId !== invReqRef.current) return;
+    
     if (prodErr) {
       setScanError(`Product check failed: ${prodErr.message}`);
       setInvLoading(false);
@@ -686,6 +930,8 @@ export default function App() {
       .eq("product_code", productCode)
       .maybeSingle();
 
+    if (reqId !== invReqRef.current) return;
+
     if (imgErr) {
       setScanError(`Image lookup failed: ${imgErr.message}`);
       setInvLoading(false);
@@ -696,7 +942,8 @@ export default function App() {
       const { data: pub } = supabase.storage
         .from(BUCKET)
         .getPublicUrl(imgRow.image_path);
-
+      
+      if (reqId !== invReqRef.current) return;  
       setInvImageUrl(pub.publicUrl);
     } else {
       setInvImageUrl(null);
@@ -708,6 +955,8 @@ export default function App() {
       .select("on_hand")
       .eq("product_code", productCode)
       .maybeSingle();
+
+    if (reqId !== invReqRef.current) return;
 
     if (invErr) {
       setScanError(`On-hand lookup failed: ${invErr.message}`);
@@ -722,6 +971,8 @@ export default function App() {
       .order("created_at", { ascending: false })
       .limit(3);
 
+    if (reqId !== invReqRef.current) return;
+
     if (adjErr) {
       setScanError(`Adjustment history failed: ${adjErr.message}`);
       setInvAdjustments([]);
@@ -730,6 +981,8 @@ export default function App() {
     }
 
     await loadRecentMoves(productCode);
+
+    if (reqId !== invReqRef.current) return;
 
     setInvOnHand(invRow?.on_hand ?? 0);
     setInvLoading(false);
@@ -792,81 +1045,6 @@ export default function App() {
       .limit(3);
 
     if (!adjErr) setInvAdjustments((adjRows ?? []) as Adjustment[]);
-  };
-
-  // Moving inventory
-
-  const submitMove = async () => {
-    setInvError(null);
-    setInvSuccess(null);
-
-    if (!invProductCode) return;
-
-    if (!fromLoc || !toLoc) {
-      setInvError("Move failed: select both From and To locations.");
-      return;
-    }
-    if (fromLoc === toLoc) {
-      setInvError("Move failed: From and To locations must be different.");
-      return;
-    }
-    if (!moveQty || moveQty <= 0) {
-      setInvError("Move failed: quantity must be at least 1.");
-      return;
-    }
-
-    const { error } = await supabase.rpc(MOVE_RPC, {
-      p_product_code: invProductCode,
-      p_from_location_id: fromLoc, // string
-      p_to_location_id: toLoc, //string
-      p_qty: moveQty,
-      p_note: invNote || null,
-    });
-
-    if (error) {
-      setInvError(`Move failed: ${error.message}`);
-      return;
-    }
-
-    // Refresh TOTAL on-hand (transfer should not change it, but keep UI synced)
-    const { data: invRow, error: invErr } = await supabase
-      .from(ON_HAND_TABLE)
-      .select("on_hand")
-      .eq("product_code", invProductCode)
-      .maybeSingle();
-
-    if (invErr) {
-      setInvError(`Move saved, but refresh failed: ${invErr.message}`);
-      return;
-    }
-
-    setInvOnHand(invRow?.on_hand ?? 0);
-    setInvSuccess("Inventory moved.");
-
-    // Refresh per-location balances for this product
-    const { data, error: locErr } = await supabase
-      .from(LOC_ON_HAND_TABLE)
-      .select("location_id, on_hand, locations_test(location_code)")
-      .eq("product_code", invProductCode)
-      .order("on_hand", { ascending: false });
-
-    if (locErr) {
-      console.error("loc refresh error", locErr);
-    } else {
-      setLocBalances(
-        (data ?? []).map((r: any) => ({
-          location_id: r.location_id,
-          on_hand: r.on_hand,
-          location_code: r.locations_test?.location_code ?? r.location_id,
-        }))
-      );
-    }
-    await loadRecentMoves(invProductCode);
-
-    // Reset move fields
-    setMoveQty(1);
-    setFromLoc("");
-    setToLoc("");
   };
 
   // Loading Recent Moving History 
@@ -1298,6 +1476,32 @@ export default function App() {
                     )}
                   </div>
                 )}
+
+                {/* Batch Mode Button */}
+                <div className="flex items-center justify-between">
+                  <div className={`text-xs ${textMuted}`}>
+                    {batchMode ? "Batch mode ON: scans add to cart" : "Batch mode OFF: scans load one item"}
+                  </div>
+
+                  <button
+                    type="button"
+                    className={batchMode ? btnToggleActive : btnToggleInactive}
+                    onClick={() => {
+                      setBatchMode((b) => !b);
+                      setInvError(null);
+                      setInvSuccess(null);
+
+                      // Optional: clear cart when turning off
+                      // if (batchMode) setCartLines([]);
+
+                      // Optional: disallow Adjust in batch
+                      if (!batchMode && movementType === "adjust") setMovementType("receive");
+                    }}
+                  >
+                    {batchMode ? "Batch ON" : "Batch OFF"}
+                  </button>
+                </div>
+
                 {/* Movement tabs switch */}
                 <div className="flex gap-2 flex-wrap">
                   <button
@@ -1546,10 +1750,10 @@ export default function App() {
                     <button
                       className={btnBlue}
                       type="button"
-                      onClick={submitReceive}  
-                      disabled={!canReceive}
+                      onClick={batchMode ? submitReceiveBatch : submitReceive}  
+                      disabled={batchMode ? !receiveToLoc || cartLines.length === 0 : !canReceive}
                     >
-                      {t("confirm_receive")}
+                      {batchMode ? "Submit receive" : t("confirm_receive")}
                     </button>
                   </div>
                 )}
@@ -1620,10 +1824,10 @@ export default function App() {
                     <button
                       className={btnBlue}
                       type="button"
-                      onClick={submitSend}
-                      disabled={!canSend}
+                      onClick={batchMode ? submitSendBatch : submitSend}
+                      disabled={batchMode ? !sendFromLoc || cartLines.length === 0 : !canSend}
                     >
-                      {t("confirm_send")}
+                      {batchMode ? "Submit send" : t("confirm_send")}
                     </button>
                   </div>
                 )}
@@ -1751,10 +1955,14 @@ export default function App() {
                     <button
                       className={btnBlue}
                       type="button"
-                      onClick={submitMove}
-                      disabled={!fromLoc || !toLoc || fromLoc === toLoc || moveQty < 1}
+                      onClick={batchMode ? submitTransferBatch : submitMove}
+                      disabled={
+                        batchMode
+                          ? !fromLoc || !toLoc || fromLoc === toLoc || cartLines.length === 0
+                          : !fromLoc || !toLoc || fromLoc === toLoc || moveQty < 1
+                      }
                     >
-                      {t("confirm_move")}
+                      {batchMode ? "Submit transfer" : t("confirm_move")}
                     </button>
                   </div>
                 )}
