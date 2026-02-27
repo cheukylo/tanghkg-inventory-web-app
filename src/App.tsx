@@ -113,7 +113,35 @@ export default function App() {
   const invScanBusyRef = useRef(false);
   const lastScanRef = useRef<{ code: string; ts: number }>({ code: "", ts: 0 });
 
-  
+  // Chime audio
+  const playChime = () => {
+    try {
+      const AudioCtx = (window.AudioContext || (window as any).webkitAudioContext);
+      if (!AudioCtx) return;
+
+      const ctx = new AudioCtx();
+
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+
+      o.type = "sine";
+      o.frequency.value = 880; // A5
+
+      g.gain.setValueAtTime(0.0001, ctx.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.25, ctx.currentTime + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.18);
+
+      o.connect(g);
+      g.connect(ctx.destination);
+
+      o.start();
+      o.stop(ctx.currentTime + 0.2);
+
+      o.onended = () => ctx.close();
+    } catch {
+      // ignore
+    }
+  };
 
   // New tabs within inventory mode 2-26-2026
   type InvStep = "menu" | "receive" | "send" | "transfer" | "adjust";
@@ -832,17 +860,18 @@ export default function App() {
 
           try {
             if (targetMode === "scan") {
-              await handleScanMode(productCode);
-              await stopScan(); // scan mode = one-and-done
+              const scanOk = await handleScanMode(productCode);
+              if (scanOk) playChime();
+              await stopScan();
             } else {
               // inventory mode
-              await handleInventoryModeScan(productCode);
+              const ok = await handleInventoryModeScan(productCode);
 
-              // ✅ Only stop camera if NOT batch mode
+              if (ok) playChime();
+
               if (!batchMode) {
                 await stopScan();
               }
-              // If batchMode is true, keep scanning
             }
           } finally {
             invScanBusyRef.current = false;
@@ -856,7 +885,7 @@ export default function App() {
     }
   };
 
-  const handleScanMode = async (productCode: string) => {
+  const handleScanMode = async (productCode: string): Promise<boolean> => {
     setScanViewResult(null);
 
     const { data, error } = await supabase
@@ -871,13 +900,13 @@ export default function App() {
           `${error?.message ?? "no data returned"}`
       );
       setScanViewResult({ productCode });
-      return;
+      return false;
     }
 
     if (!data.image_path) {
       setScanError(`Found ${productCode} but no image_path in table.`);
       setScanViewResult({ productCode: data.product_code ?? productCode });
-      return;
+      return false;
     }
 
     const { data: pub } = supabase.storage
@@ -888,9 +917,10 @@ export default function App() {
       productCode: data.product_code ?? productCode,
       imageUrl: pub.publicUrl,
     });
+    return true;
   };
 
-  const handleInventoryModeScan = async (productCode: string) => {
+  const handleInventoryModeScan = async (productCode: string): Promise<boolean> => {
     const code = productCode.trim().toUpperCase();
     const reqId = ++invReqRef.current;
 
@@ -916,17 +946,17 @@ export default function App() {
       .eq("product_code", productCode)
       .maybeSingle();
 
-    if (reqId !== invReqRef.current) return;
+    if (reqId !== invReqRef.current) return false;
     
     if (prodErr) {
       setScanError(`Product check failed: ${prodErr.message}`);
       setInvLoading(false);
-      return;
+      return false;
     }
     if (!prod) {
       setScanError(`No product found for: ${productCode}`);
       setInvLoading(false);
-      return;
+      return false;
     }
     // 2) Fetch product image
     const { data: imgRow, error: imgErr } = await supabase
@@ -935,12 +965,12 @@ export default function App() {
       .eq("product_code", productCode)
       .maybeSingle();
 
-    if (reqId !== invReqRef.current) return;
+    if (reqId !== invReqRef.current) return false;
 
     if (imgErr) {
       setScanError(`Image lookup failed: ${imgErr.message}`);
       setInvLoading(false);
-      return;
+      return false;
     }
 
     if (imgRow?.image_path) {
@@ -948,7 +978,7 @@ export default function App() {
         .from(BUCKET)
         .getPublicUrl(imgRow.image_path);
       
-      if (reqId !== invReqRef.current) return;  
+      if (reqId !== invReqRef.current) return false;  
       setInvImageUrl(pub.publicUrl);
     } else {
       setInvImageUrl(null);
@@ -961,12 +991,12 @@ export default function App() {
       .eq("product_code", productCode)
       .maybeSingle();
 
-    if (reqId !== invReqRef.current) return;
+    if (reqId !== invReqRef.current) return false;
 
     if (invErr) {
       setScanError(`On-hand lookup failed: ${invErr.message}`);
       setInvLoading(false);
-      return;
+      return false;
     }
     // 4) Load last 3 adjustments
     const { data: adjRows, error: adjErr } = await supabase
@@ -976,7 +1006,7 @@ export default function App() {
       .order("created_at", { ascending: false })
       .limit(3);
 
-    if (reqId !== invReqRef.current) return;
+    if (reqId !== invReqRef.current) return false;
 
     if (adjErr) {
       setScanError(`Adjustment history failed: ${adjErr.message}`);
@@ -987,10 +1017,11 @@ export default function App() {
 
     await loadRecentMoves(productCode);
 
-    if (reqId !== invReqRef.current) return;
+    if (reqId !== invReqRef.current) return false;
 
     setInvOnHand(invRow?.on_hand ?? 0);
     setInvLoading(false);
+    return true
   };
 
   // ---------- Inventory adjustment ----------
