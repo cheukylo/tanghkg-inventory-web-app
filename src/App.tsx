@@ -115,9 +115,9 @@ export default function App() {
 
   
 
-  // New tabs within inventory mode 2-16-2026
-  type MovementType = "receive" | "send" | "transfer" | "adjust";
-  const [movementType, setMovementType] = useState<MovementType>("receive");
+  // New tabs within inventory mode 2-26-2026
+  type InvStep = "menu" | "receive" | "send" | "transfer" | "adjust";
+  const [invStep, setInvStep] = useState<InvStep>("menu");
 
   const [adjustLoc, setAdjustLoc] = useState("");
   const [receiveToLoc, setReceiveToLoc] = useState<string>("");
@@ -566,9 +566,10 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoStartMode, mode]);
 
-  // handle the Move/Adjust options within Inventory mode
+  // handle the options within Inventory mode
   useEffect(() => {
     if (mode !== "inventory") return;
+    
 
     const loadLocations = async () => {
       const { data, error } = await supabase
@@ -774,6 +775,10 @@ export default function App() {
     setInvSearchBusy(false);
     setInvEntry("search");
     setInvMoves([]);
+    setInvStep("menu");
+    setBatchMode(false);
+    setCartLines([]);
+    setActiveCode(null);
 
 
   };
@@ -1230,6 +1235,9 @@ export default function App() {
                 resetAllWorkflows();
                 setMode("inventory");
                 setInvEntry("search");
+                setInvStep("menu");
+                setBatchMode(false);
+                clearCart();
               }}
             >
               {t("inventory_movements")}
@@ -1289,707 +1297,762 @@ export default function App() {
         {/* Inventory mode panel */}
         {mode === "inventory" && (
           <div className="space-y-4">
-            {/* --- Top: two input containers --- */}
-            <div className="grid gap-4 md:grid-cols-2">
-              {/* Manual lookup container */}
+            {invStep === "menu" && (
               <div className={`p-5 space-y-3 ${surface}`}>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <div className="text-base font-semibold">{t("manual_lookup")}</div>
-                    <div className={`text-xs ${textMuted}`}>
-                      Enter a product code like RB-10-02-16
-                    </div>
-                  </div>
-                </div>
-
-                <div className="flex gap-2">
-                  <input
-                    className={inputStyle}
-                    value={invSearchCode}
-                    onChange={(e) => {
-                      setInvSearchCode(e.target.value);
-                      setInvSearchError(null);
-                    }}
-                    placeholder="RB-10-02-16"
-                    autoCapitalize="characters"
-                    autoCorrect="off"
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") handleInventorySearch();
-                    }}
-                  />
-
-                  <button
-                    type="button"
-                    className={btnSecondary}
-                    onClick={handleInventorySearch}
-                    disabled={invSearchBusy}
-                  >
-                    {invSearchBusy ? "Searching…" : "Search"}
-                  </button>
-                </div>
-
-                {invSearchError && (
-                  <p className="text-sm text-[#B42318] whitespace-pre-line">
-                    {invSearchError}
-                  </p>
-                )}
-              </div>
-
-              {/* Camera scan container */}
-              <div className={`p-5 space-y-3 ${surface}`}>
-                <div>
-                  <div className="text-base font-semibold">{t("camera_scan")}</div>
-                  <div className={`text-xs ${textMuted}`}>
-                    Scan the QR label to load the product
-                  </div>
-                </div>
+                <div className="text-base font-semibold">Inventory actions</div>
+                <div className={`text-xs ${textMuted}`}>Choose one workflow.</div>
 
                 <button
-                  className={btnPrimary}
-                  onClick={() => startScan("inventory")}
-                  disabled={isScanning}
                   type="button"
+                  className={btnPrimary}
+                  onClick={() => {
+                    setInvStep("receive");
+                    setInvError(null);
+                    setInvSuccess(null);
+                    setBatchMode(false);
+                    clearCart();
+                    setInvProductCode(null);
+                  }}
                 >
-                  {isScanning ? "Scanning…" : "Open camera & scan QR"}
+                  Receive
                 </button>
 
-                {isScanning && (
-                  <button className={btnSecondary} onClick={stopScan} type="button">
-                    Stop scanning
-                  </button>
-                )}
+                <button
+                  type="button"
+                  className={btnPrimary}
+                  onClick={() => {
+                    setInvStep("send");
+                    setInvError(null);
+                    setInvSuccess(null);
+                    setBatchMode(false);
+                    clearCart();
+                    setInvProductCode(null);
+                  }}
+                >
+                  Send
+                </button>
 
-                {/* Keep this always mounted in inventory mode for scanning */}
-                <div id={regionId} className="w-full overflow-hidden rounded-xl" />
+                <button
+                  type="button"
+                  className={btnPrimary}
+                  onClick={() => {
+                    setInvStep("transfer");
+                    setInvError(null);
+                    setInvSuccess(null);
+                    setBatchMode(false);
+                    clearCart();
+                    setInvProductCode(null);
+                  }}
+                >
+                  Transfer
+                </button>
 
-                {scanError && (
-                  <p className="text-sm text-[#B42318] whitespace-pre-line">
-                    {scanError}
-                  </p>
-                )}
+                <button
+                  type="button"
+                  className={btnSecondary}
+                  onClick={() => {
+                    setInvStep("adjust");
+                    setInvError(null);
+                    setInvSuccess(null);
+                    setBatchMode(false); // force off for adjust
+                    clearCart();
+                    setInvProductCode(null);
+                  }}
+                >
+                  Adjust
+                </button>
               </div>
-            </div>
-
-            {/* --- Below: product details & adjustments (only after product selected) --- */}
-
-            {invProductCode ? (
-              <div className={`p-5 space-y-4 ${surface}`}>
-                {/* Header row */}
-                <div className={`text-xs ${textMuted}`}>
-                  {movementType === "adjust" && "Adjust on-hand at a location (damage, recount, corrections)."}
-                  {movementType === "receive" && "Receive stock into a location (adds on-hand)."}
-                  {movementType === "send" && "Send stock out from a location (removes on-hand)."}
-                  {movementType === "transfer" && "Move stock between locations (total on-hand stays the same)."}
-                </div>
-                {/* Image */}
-                {invImageUrl && (
-                  <img
-                    src={invImageUrl}
-                    alt="Product"
-                    className="w-full rounded-xl border border-[#E8D9D9]"
-                  />
-                )}
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <div className={`text-sm ${textMuted}`}>Product code</div>
-                    <div className="text-lg font-semibold">{invProductCode}</div>
-                  </div>
-
-                  <div className="text-right">
-                    <div className={`text-sm ${textMuted}`}>On hand</div>
-                    <div className="text-2xl font-semibold">
-                      {invLoading ? "…" : invOnHand ?? "—"}
-                    </div>
-                  </div>
-                </div>
-                {/* Batch Mode*/}
-                {batchMode && (
-                  <div className="rounded-xl border border-[#E8D9D9] bg-white p-3">
+            )}
+            {invStep !== "menu" && (
+              <>
+                {/* --- Top: two input containers --- */}
+                <div className="grid gap-4 md:grid-cols-2">
+                  {/* Manual lookup container */}
+                  <div className={`p-5 space-y-3 ${surface}`}>
                     <div className="flex items-center justify-between">
-                      <div className="text-sm font-semibold text-[#111111]">Cart</div>
-                      <button
-                        type="button"
-                        className="text-xs underline text-[#5B4B4B]"
-                        onClick={() => setCartLines([])}
-                      >
-                        Clear
-                      </button>
-                    </div>
-
-                    {cartLines.length === 0 ? (
-                      <div className="text-sm text-[#5B4B4B] mt-1">Scan items to add them here.</div>
-                    ) : (
-                      <div className="mt-2 space-y-2">
-                        {cartLines.map((line) => (
-                          <div key={line.product_code} className="flex items-center justify-between gap-3">
-                            <div className="min-w-0">
-                              <div className="text-sm font-semibold truncate">{line.product_code}</div>
-                            </div>
-
-                            <div className="flex items-center gap-2">
-                              <button
-                                type="button"
-                                className="rounded-lg px-2 py-1 border border-[#E8D9D9] bg-white"
-                                onClick={() =>
-                                  setCartLines((prev) =>
-                                    prev
-                                      .map((x) =>
-                                        x.product_code === line.product_code
-                                          ? { ...x, qty: Math.max(1, x.qty - 1) }
-                                          : x
-                                      )
-                                  )
-                                }
-                              >
-                                –
-                              </button>
-
-                              <div className="w-8 text-center font-semibold">{line.qty}</div>
-
-                              <button
-                                type="button"
-                                className="rounded-lg px-2 py-1 border border-[#E8D9D9] bg-white"
-                                onClick={() =>
-                                  setCartLines((prev) =>
-                                    prev.map((x) =>
-                                      x.product_code === line.product_code ? { ...x, qty: x.qty + 1 } : x
-                                    )
-                                  )
-                                }
-                              >
-                                +
-                              </button>
-
-                              <button
-                                type="button"
-                                className="text-xs underline text-[#B42318]"
-                                onClick={() =>
-                                  setCartLines((prev) => prev.filter((x) => x.product_code !== line.product_code))
-                                }
-                              >
-                                Remove
-                              </button>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* Batch Mode Button */}
-                <div className="flex items-center justify-between">
-                  <div className={`text-xs ${textMuted}`}>
-                    {batchMode ? "Batch mode ON: scans add to cart" : "Batch mode OFF: scans load one item"}
-                  </div>
-
-                  <button
-                    type="button"
-                    className={batchMode ? btnToggleActive : btnToggleInactive}
-                    onClick={() => {
-                      setBatchMode((b) => !b);
-                      setInvError(null);
-                      setInvSuccess(null);
-
-                      // Optional: clear cart when turning off
-                      // if (batchMode) setCartLines([]);
-
-                      // Optional: disallow Adjust in batch
-                      if (!batchMode && movementType === "adjust") setMovementType("receive");
-                    }}
-                  >
-                    {batchMode ? "Batch ON" : "Batch OFF"}
-                  </button>
-                </div>
-
-                {/* Movement tabs switch */}
-                <div className="flex gap-2 flex-wrap">
-                  <button
-                    type="button"
-                    className={movementType === "receive" ? btnToggleActive : btnToggleInactive}
-                    onClick={() => { setMovementType("receive"); setInvError(null); setInvSuccess(null); }}
-                  >
-                    {t("receive")}
-                  </button>
-
-                  <button
-                    type="button"
-                    className={movementType === "send" ? btnToggleActive : btnToggleInactive}
-                    onClick={() => { setMovementType("send"); setInvError(null); setInvSuccess(null); }}
-                  >
-                    {t("send")}
-                  </button>
-
-                  <button
-                    type="button"
-                    className={movementType === "transfer" ? btnToggleActive : btnToggleInactive}
-                    onClick={() => { setMovementType("transfer"); setInvError(null); setInvSuccess(null); }}
-                  >
-                    {t("transfer")}
-                  </button>
-
-                  <button
-                    type="button"
-                    className={movementType === "adjust" ? btnToggleActive : btnToggleInactive}
-                    onClick={() => {
-                      if (batchMode) return; // or auto-switch batchMode off
-                      setMovementType("adjust");
-                      setInvError(null); setInvSuccess(null);
-                    }}
-                  > 
-                    {t("adjust")}
-                  </button>
-                </div>
-
-
-                {movementType === "adjust" && (
-                  <>
-                    {/* Where it is*/}
-                    <div className="rounded-xl border border-[#E8D9D9] bg-white p-3">
-                      <div className="text-sm font-semibold text-[#111111]">{t("availability")}</div>
-
-                      {locBalances.length === 0 ? (
-                        <div className="text-sm text-[#5B4B4B] mt-1">{t("no_stock_any_location")}</div>
-                      ) : (
-                        <div className="mt-2 space-y-2">
-                          {locBalances
-                            .filter((x) => x.on_hand > 0)
-                            .sort((a, b) => b.on_hand - a.on_hand)
-                            .map((x) => (
-                              <div key={x.location_id} className="flex items-center justify-between">
-                                <div className="text-sm text-[#111111]">{x.location_code ?? x.location_id}</div>
-                                <div className="text-sm font-semibold">{x.on_hand}</div>
-                              </div>
-                            ))}
-                        </div>
-                      )}
-                    </div>
-                    {/* Adjustment Location */}
-                    <div className="grid grid-cols-2 gap-2">
-                      <div className="col-span-2">
-                        <div className={`text-xs ${textMuted} mb-1`}>{t("location")}</div>
-                        <select
-                          className={inputStyle}
-                          value={adjustLoc}
-                          onChange={(e) => setAdjustLoc(e.target.value)}
-                        >
-                          <option value="">Select location</option>
-                          {locations.map((l) => (
-                            <option key={l.id} value={l.id}>
-                              {l.location_code}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    </div>
-                    {/* Last 3 adjustments */}
-                    <div className="rounded-xl border border-[#E8D9D9] bg-white p-3">
-                      <div className="text-sm font-semibold text-[#111111]">
-                        Recent adjustments
-                      </div>
-
-                      {invAdjustments.length === 0 ? (
-                        <div className="text-sm text-[#5B4B4B] mt-1">No adjustments yet.</div>
-                      ) : (
-                        <div className="mt-2 space-y-2">
-                          {invAdjustments.map((a) => {
-                            const isAdd = a.delta >= 0;
-                            const deltaText = isAdd ? `+${a.delta}` : `${a.delta}`;
-                            const deltaClass = isAdd ? "text-[#15803D]" : "text-[#B91C1C]";
-                            const when = new Date(a.created_at).toLocaleString();
-
-                            return (
-                              <div
-                                key={a.id}
-                                className="flex items-start justify-between gap-3 border-t border-[#F1E7E7] pt-2 first:border-t-0 first:pt-0"
-                              >
-                                <div className="min-w-0">
-                                  <div className="text-sm text-[#111111]">
-                                    {reasonLabel(a.reason)}
-                                  </div>
-                                  {a.note ? (
-                                    <div className="text-xs text-[#5B4B4B] truncate">
-                                      {a.note}
-                                    </div>
-                                  ) : null}
-                                  <div className="text-xs text-[#8A7B7B]">{when}</div>
-                                </div>
-
-                                <div className={`text-sm font-semibold ${deltaClass}`}>
-                                  {deltaText}
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Tap counter + preview */}
-                    <div className="grid grid-cols-3 gap-2 items-end">
-                      <button
-                        type="button"
-                        className="rounded-xl px-3 py-3 text-xl font-semibold bg-[#FDECEC] border border-[#FCA5A5] text-[#7F1D1D] active:scale-[0.97]"
-                        onClick={() => setInvDelta((d) => Math.min(d - 1, 0))}
-                      >
-                        –
-                      </button>
-
-                      <div className="rounded-xl border border-[#E8D9D9] bg-white px-3 py-2 text-center">
-                        <div className={`text-2xl font-bold ${previewColor}`}>
-                          {previewText}
-                        </div>
-                        <div className="text-[11px] text-[#5B4B4B]">
-                          {invOnHand == null ? "result —" : `result ${resultingOnHand}`}
-                        </div>
-                      </div>
-
-                      <button
-                        type="button"
-                        className="rounded-xl px-3 py-3 text-xl font-semibold bg-[#EAF6EF] border border-[#86EFAC] text-[#166534] active:scale-[0.97]"
-                        onClick={() => setInvDelta((d) => Math.max(d + 1, 0))}
-                      >
-                        +
-                      </button>
-                    </div>
-
-                    {/* Reason + Note */}
-                    <div className="grid grid-cols-2 gap-2">
-                      <div className="col-span-1">
-                        <div className={`text-xs ${textMuted} mb-1`}>Reason</div>
-                        <select
-                          className={inputStyle}
-                          value={invReason}
-                          onChange={(e) => setInvReason(e.target.value)}
-                        >
-                          {REASONS.map((r) => (
-                            <option key={r.value} value={r.value}>
-                              {r.label}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-
-                      <div className="col-span-1">
-                        <div className={`text-xs ${textMuted} mb-1`}>Note</div>
-                        <input
-                          className={inputStyle}
-                          value={invNote}
-                          onChange={(e) => setInvNote(e.target.value)}
-                          placeholder="Optional"
-                        />
-                      </div>
-                    </div>
-
-                    {/* Submit */}
-                    <button className={btnBlue} onClick={submitAdjustment} disabled={!canSubmit}>
-                      {t("confirm_change")}
-                    </button>
-                  </>
-                )}
-                
-                {movementType === "receive" && (
-                  <div className="space-y-3">
-                    {/* Where it is now */}
-                    <div className="rounded-xl border border-[#E8D9D9] bg-white p-3">
-                      <div className="text-sm font-semibold text-[#111111]">{t("availability")}</div>
-
-                      {locBalances.length === 0 ? (
-                        <div className="text-sm text-[#5B4B4B] mt-1">{t("no_stock_any_location")}</div>
-                      ) : (
-                        <div className="mt-2 space-y-2">
-                          {locBalances
-                            .filter((x) => x.on_hand > 0)
-                            .sort((a, b) => b.on_hand - a.on_hand)
-                            .map((x) => (
-                              <div key={x.location_id} className="flex items-center justify-between">
-                                <div className="text-sm text-[#111111]">{x.location_code ?? x.location_id}</div>
-                                <div className="text-sm font-semibold">{x.on_hand}</div>
-                              </div>
-                            ))}
-                        </div>
-                      )}
-                    </div>
-                    <div>
-                      <div className={`text-xs ${textMuted} mb-1`}>{t("to_location")}</div>
-                      <select
-                        className={inputStyle}
-                        value={receiveToLoc}
-                        onChange={(e) => setReceiveToLoc(e.target.value)}
-                        disabled={locations.length === 0}
-                      >
-                        <option value="">Select location</option>
-                        {locations.map((l) => (
-                          <option key={l.id} value={l.id}>{l.location_code}</option>
-                        ))}
-                      </select>
-                    </div>
-
-                    {!batchMode ? (
                       <div>
-                        <div className={`text-xs ${textMuted} mb-1`}>{t("qty")}</div>
-                        <input
-                          className={inputStyle}
-                          type="number"
-                          min={1}
-                          value={receiveQty}
-                          onChange={(e) => setReceiveQty(Math.max(1, Number(e.target.value) || 1))}
-                        />
-                      </div>
-                    ) : (
-                      <div className="text-xs text-[#5B4B4B]">
-                        Total units:{" "}
-                        <span className="font-semibold">
-                          {cartLines.reduce((s, x) => s + x.qty, 0)}
-                        </span>
-                        {" · "}
-                        Lines: <span className="font-semibold">{cartLines.length}</span>
-                      </div>
-                    )}
-
-                    <button
-                      className={btnBlue}
-                      type="button"
-                      onClick={batchMode ? submitReceiveBatch : submitReceive}  
-                      disabled={batchMode ? !receiveToLoc || cartLines.length === 0 : !canReceive}
-                    >
-                      {batchMode ? "Submit receive" : t("confirm_receive")}
-                    </button>
-                  </div>
-                )}
-
-                {movementType === "send" && (
-                  <div className="space-y-3">
-                    {/* show balances like “Where it is” panel */}
-                    <div className="rounded-xl border border-[#E8D9D9] bg-white p-3">
-                      <div className="text-sm font-semibold text-[#111111]">{t("availability")}</div>
-                      {locBalances.length === 0 ? (
-                        <div className="text-sm text-[#5B4B4B] mt-1">{t("no_stock_any_location")}</div>
-                      ) : (
-                        <div className="mt-2 space-y-2">
-                          {locBalances
-                            .filter((x) => x.on_hand > 0)
-                            .sort((a, b) => b.on_hand - a.on_hand)
-                            .map((x) => (
-                              <div key={x.location_id} className="flex items-center justify-between">
-                                <div className="text-sm text-[#111111]">{x.location_code ?? x.location_id}</div>
-                                <div className="text-sm font-semibold">{x.on_hand}</div>
-                              </div>
-                            ))}
+                        <div className="text-base font-semibold">{t("manual_lookup")}</div>
+                        <div className={`text-xs ${textMuted}`}>
+                          Enter a product code like RB-10-02-16
                         </div>
-                      )}
-                    </div>
-
-                    <div>
-                      <div className={`text-xs ${textMuted} mb-1`}>From location</div>
-                      <select
-                        className={inputStyle}
-                        value={sendFromLoc ?? ""}
-                        onChange={(e) => setSendFromLoc(e.target.value || "")}
-                        disabled={(locBalances ?? []).filter((x) => Number(x.on_hand ?? 0) > 0).length === 0}
-                      >
-                        <option value="">Select location</option>
-                        {(locBalances ?? [])
-                          .filter((x) => Number(x.on_hand ?? 0) > 0)
-                          .sort((a, b) => Number(b.on_hand ?? 0) - Number(a.on_hand ?? 0))
-                          .map((x) => (
-                            <option key={x.location_id} value={x.location_id}>
-                              {x.location_code ?? x.location_id} ({x.on_hand})
-                            </option>
-                          ))}
-                      </select>
-                    </div>
-                    {!batchMode ? (
-                      <div>
-                        <div className={`text-xs ${textMuted} mb-1`}> {t("qty")}</div>
-                        <input
-                          className={inputStyle}
-                          type="number"
-                          min={1}
-                          value={sendQty}
-                          onChange={(e) => setSendQty(Math.max(1, Number(e.target.value) || 1))}
-                        />
-                      </div>
-                    ) : (
-                      <div className="text-xs text-[#5B4B4B]">
-                        Total units:{" "}
-                        <span className="font-semibold">
-                          {cartLines.reduce((s, x) => s + x.qty, 0)}
-                        </span>
-                        {" · "}
-                        Lines: <span className="font-semibold">{cartLines.length}</span>
-                      </div>
-                    )}
-
-                    <button
-                      className={btnBlue}
-                      type="button"
-                      onClick={batchMode ? submitSendBatch : submitSend}
-                      disabled={batchMode ? !sendFromLoc || cartLines.length === 0 : !canSend}
-                    >
-                      {batchMode ? "Submit send" : t("confirm_send")}
-                    </button>
-                  </div>
-                )}
-
-                {movementType === "transfer" && (
-                  <div className="space-y-3">
-                    {/* Where it is now */}
-                    <div className="rounded-xl border border-[#E8D9D9] bg-white p-3">
-                      <div className="text-sm font-semibold text-[#111111]">{t("availability")}</div>
-
-                      {locBalances.length === 0 ? (
-                        <div className="text-sm text-[#5B4B4B] mt-1">{t("no_stock_any_location")}</div>
-                      ) : (
-                        <div className="mt-2 space-y-2">
-                          {locBalances
-                            .filter((x) => x.on_hand > 0)
-                            .sort((a, b) => b.on_hand - a.on_hand)
-                            .map((x) => (
-                              <div key={x.location_id} className="flex items-center justify-between">
-                                <div className="text-sm text-[#111111]">{x.location_code ?? x.location_id}</div>
-                                <div className="text-sm font-semibold">{x.on_hand}</div>
-                              </div>
-                            ))}
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Recent moves */}
-                    <div className="rounded-xl border border-[#E8D9D9] bg-white p-3">
-                      <div className="text-sm font-semibold text-[#111111]">{t("recent_activities")}</div>
-
-                      {invMoves.length === 0 ? (
-                        <div className="text-sm text-[#5B4B4B] mt-1">No moves yet.</div>
-                      ) : (
-                        <div className="mt-2 space-y-2">
-                          {invMoves.map((m) => {
-                            const when = new Date(m.created_at).toLocaleString();
-                            const fromCode = m.from_location?.location_code ?? m.from_location_id;
-                            const toCode = m.to_location?.location_code ?? m.to_location_id;
-
-                            return (
-                              <div
-                                key={m.id}
-                                className="flex items-start justify-between gap-3 border-t border-[#F1E7E7] pt-2 first:border-t-0 first:pt-0"
-                              >
-                                <div className="min-w-0">
-                                  <div className="text-sm text-[#111111]">
-                                    (<span className="font-semibold">{m.quantity}</span>) {fromCode} → {toCode}
-                                  </div>
-                                  {m.note ? (
-                                    <div className="text-xs text-[#5B4B4B] truncate">{m.note}</div>
-                                  ) : null}
-                                  <div className="text-xs text-[#8A7B7B]">{when}</div>
-                                </div>
-
-                                <div className="text-sm font-semibold text-[#111111]">
-                                  {m.qty}
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Move form */}
-                    <div className="grid grid-cols-2 gap-2">
-                      {/* FROM */}
-                      <div className="col-span-1">
-                        <div className={`text-xs ${textMuted} mb-1`}>From</div>
-                        <select
-                          className={inputStyle}
-                          value={fromLoc}
-                          onChange={(e) => setFromLoc(e.target.value)}
-                          disabled={(locBalances ?? []).filter((x) => Number(x.on_hand ?? 0) > 0).length === 0}
-                        >
-                          <option value="">Select location</option>
-
-                          {(locBalances ?? [])
-                            .filter((x) => Number(x.on_hand ?? 0) > 0)
-                            .sort((a, b) => Number(b.on_hand ?? 0) - Number(a.on_hand ?? 0))
-                            .map((x) => (
-                              <option key={x.location_id} value={x.location_id}>
-                                {x.location_code ?? x.location_id} ({x.on_hand})
-                              </option>
-                            ))}
-                        </select>
-                      </div>
-
-                      {/* TO */}
-                      <div className="col-span-1">
-                        <div className={`text-xs ${textMuted} mb-1`}>To</div>
-
-                        <select
-                          className={inputStyle}
-                          value={toLoc}
-                          onChange={(e) => setToLoc(e.target.value)}
-                          disabled={locations.length === 0}
-                        >
-                          <option value="">Select location</option>
-
-                          {locations
-                            .filter((l) => !fromLoc || l.id !== fromLoc) // optional: prevent choosing same as From
-                            .map((l) => (
-                              <option key={l.id} value={l.id}>
-                                {l.location_code}
-                              </option>
-                            ))}
-                        </select>
                       </div>
                     </div>
 
-
-                    <div>
-                      <div className={`text-xs ${textMuted} mb-1`}>{t("qty")}</div>
+                    <div className="flex gap-2">
                       <input
                         className={inputStyle}
-                        type="number"
-                        min={1}
-                        value={moveQty}
-                        onChange={(e) => setMoveQty(Math.max(1, Number(e.target.value) || 1))}
+                        value={invSearchCode}
+                        onChange={(e) => {
+                          setInvSearchCode(e.target.value);
+                          setInvSearchError(null);
+                        }}
+                        placeholder="RB-10-02-16"
+                        autoCapitalize="characters"
+                        autoCorrect="off"
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") handleInventorySearch();
+                        }}
                       />
+
+                      <button
+                        type="button"
+                        className={btnSecondary}
+                        onClick={handleInventorySearch}
+                        disabled={invSearchBusy}
+                      >
+                        {invSearchBusy ? "Searching…" : "Search"}
+                      </button>
+                    </div>
+
+                    {invSearchError && (
+                      <p className="text-sm text-[#B42318] whitespace-pre-line">
+                        {invSearchError}
+                      </p>
+                    )}
+                  </div>
+
+                  {/* Camera scan container */}
+                  <div className={`p-5 space-y-3 ${surface}`}>
+                    <div>
+                      <div className="text-base font-semibold">{t("camera_scan")}</div>
+                      <div className={`text-xs ${textMuted}`}>
+                        Scan the QR label to load the product
+                      </div>
                     </div>
 
                     <button
-                      className={btnBlue}
+                      className={btnPrimary}
+                      onClick={() => startScan("inventory")}
+                      disabled={isScanning}
                       type="button"
-                      onClick={batchMode ? submitTransferBatch : submitMove}
-                      disabled={
-                        batchMode
-                          ? !fromLoc || !toLoc || fromLoc === toLoc || cartLines.length === 0
-                          : !fromLoc || !toLoc || fromLoc === toLoc || moveQty < 1
-                      }
                     >
-                      {batchMode ? "Submit transfer" : t("confirm_move")}
+                      {isScanning ? "Scanning…" : "Open camera & scan QR"}
                     </button>
+
+                    {isScanning && (
+                      <button className={btnSecondary} onClick={stopScan} type="button">
+                        Stop scanning
+                      </button>
+                    )}
+
+                    {/* Keep this always mounted in inventory mode for scanning */}
+                    <div id={regionId} className="w-full overflow-hidden rounded-xl" />
+
+                    {scanError && (
+                      <p className="text-sm text-[#B42318] whitespace-pre-line">
+                        {scanError}
+                      </p>
+                    )}
+                  </div>
+                </div>
+
+                {/* --- Below: product details & adjustments (only after product selected) --- */}
+
+                {invProductCode ? (
+                  <div className={`p-5 space-y-4 ${surface}`}>
+                    {/* Workflow header + back */}
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="text-sm font-semibold text-[#111111]">
+                          {invStep === "receive" && "Receive"}
+                          {invStep === "send" && "Send"}
+                          {invStep === "transfer" && "Transfer"}
+                          {invStep === "adjust" && "Adjust"}
+                        </div>
+                        <div className={`text-xs ${textMuted}`}>
+                          {invStep === "adjust" && "Adjust on-hand at a location (damage, recount, corrections)."}
+                          {invStep === "receive" && "Receive stock into a location (adds on-hand)."}
+                          {invStep === "send" && "Send stock out from a location (removes on-hand)."}
+                          {invStep === "transfer" && "Move stock between locations (total on-hand stays the same)."}
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        className={btnChip}
+                        onClick={async () => {
+                          await stopScan();
+                          setInvError(null);
+                          setInvSuccess(null);
+                          setBatchMode(false);
+                          clearCart();
+                          setInvProductCode(null);
+                          setInvImageUrl(null);
+                          setInvOnHand(null);
+                          setInvAdjustments([]);
+                          setInvMoves([]);
+                          setInvStep("menu");
+                        }}
+                      >
+                        Back
+                      </button>
+                    </div>
+                    {/* Image */}
+                    {invImageUrl && (
+                      <img
+                        src={invImageUrl}
+                        alt="Product"
+                        className="w-full rounded-xl border border-[#E8D9D9]"
+                      />
+                    )}
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className={`text-sm ${textMuted}`}>Product code</div>
+                        <div className="text-lg font-semibold">{invProductCode}</div>
+                      </div>
+
+                      <div className="text-right">
+                        <div className={`text-sm ${textMuted}`}>On hand</div>
+                        <div className="text-2xl font-semibold">
+                          {invLoading ? "…" : invOnHand ?? "—"}
+                        </div>
+                      </div>
+                    </div>
+                    {/* Batch Mode */}
+                    {invStep !== "adjust" && batchMode && (
+                      <div className="rounded-xl border border-[#E8D9D9] bg-white p-3">
+                        <div className="flex items-center justify-between">
+                          <div className="text-sm font-semibold text-[#111111]">Cart</div>
+                          <button
+                            type="button"
+                            className="text-xs underline text-[#5B4B4B]"
+                            onClick={() => setCartLines([])}
+                          >
+                            Clear
+                          </button>
+                        </div>
+
+                        {cartLines.length === 0 ? (
+                          <div className="text-sm text-[#5B4B4B] mt-1">Scan items to add them here.</div>
+                        ) : (
+                          <div className="mt-2 space-y-2">
+                            {cartLines.map((line) => (
+                              <div key={line.product_code} className="flex items-center justify-between gap-3">
+                                <div className="min-w-0">
+                                  <div className="text-sm font-semibold truncate">{line.product_code}</div>
+                                </div>
+
+                                <div className="flex items-center gap-2">
+                                  <button
+                                    type="button"
+                                    className="rounded-lg px-2 py-1 border border-[#E8D9D9] bg-white"
+                                    onClick={() =>
+                                      setCartLines((prev) =>
+                                        prev
+                                          .map((x) =>
+                                            x.product_code === line.product_code
+                                              ? { ...x, qty: Math.max(1, x.qty - 1) }
+                                              : x
+                                          )
+                                      )
+                                    }
+                                  >
+                                    –
+                                  </button>
+
+                                  <div className="w-8 text-center font-semibold">{line.qty}</div>
+
+                                  <button
+                                    type="button"
+                                    className="rounded-lg px-2 py-1 border border-[#E8D9D9] bg-white"
+                                    onClick={() =>
+                                      setCartLines((prev) =>
+                                        prev.map((x) =>
+                                          x.product_code === line.product_code ? { ...x, qty: x.qty + 1 } : x
+                                        )
+                                      )
+                                    }
+                                  >
+                                    +
+                                  </button>
+
+                                  <button
+                                    type="button"
+                                    className="text-xs underline text-[#B42318]"
+                                    onClick={() =>
+                                      setCartLines((prev) => prev.filter((x) => x.product_code !== line.product_code))
+                                    }
+                                  >
+                                    Remove
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {invStep !== "adjust" && (
+                      <div className="flex items-center justify-between">
+                        <div className={`text-xs ${textMuted}`}>
+                          {batchMode ? "Batch mode ON: scans add to cart" : "Batch mode OFF: scans load one item"}
+                        </div>
+
+                        <button
+                          type="button"
+                          className={batchMode ? btnToggleActive : btnToggleInactive}
+                          onClick={() => {
+                            setBatchMode((b) => !b);
+                            setInvError(null);
+                            setInvSuccess(null);
+                          }}
+                        >
+                          {batchMode ? "Batch ON" : "Batch OFF"}
+                        </button>
+                      </div>
+                    )}
+
+                    {invStep === "adjust" && (
+                      <>
+                        {/* Where it is*/}
+                        <div className="rounded-xl border border-[#E8D9D9] bg-white p-3">
+                          <div className="text-sm font-semibold text-[#111111]">{t("availability")}</div>
+
+                          {locBalances.length === 0 ? (
+                            <div className="text-sm text-[#5B4B4B] mt-1">{t("no_stock_any_location")}</div>
+                          ) : (
+                            <div className="mt-2 space-y-2">
+                              {locBalances
+                                .filter((x) => x.on_hand > 0)
+                                .sort((a, b) => b.on_hand - a.on_hand)
+                                .map((x) => (
+                                  <div key={x.location_id} className="flex items-center justify-between">
+                                    <div className="text-sm text-[#111111]">{x.location_code ?? x.location_id}</div>
+                                    <div className="text-sm font-semibold">{x.on_hand}</div>
+                                  </div>
+                                ))}
+                            </div>
+                          )}
+                        </div>
+                        {/* Adjustment Location */}
+                        <div className="grid grid-cols-2 gap-2">
+                          <div className="col-span-2">
+                            <div className={`text-xs ${textMuted} mb-1`}>{t("location")}</div>
+                            <select
+                              className={inputStyle}
+                              value={adjustLoc}
+                              onChange={(e) => setAdjustLoc(e.target.value)}
+                            >
+                              <option value="">Select location</option>
+                              {locations.map((l) => (
+                                <option key={l.id} value={l.id}>
+                                  {l.location_code}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        </div>
+                        {/* Last 3 adjustments */}
+                        <div className="rounded-xl border border-[#E8D9D9] bg-white p-3">
+                          <div className="text-sm font-semibold text-[#111111]">
+                            Recent adjustments
+                          </div>
+
+                          {invAdjustments.length === 0 ? (
+                            <div className="text-sm text-[#5B4B4B] mt-1">No adjustments yet.</div>
+                          ) : (
+                            <div className="mt-2 space-y-2">
+                              {invAdjustments.map((a) => {
+                                const isAdd = a.delta >= 0;
+                                const deltaText = isAdd ? `+${a.delta}` : `${a.delta}`;
+                                const deltaClass = isAdd ? "text-[#15803D]" : "text-[#B91C1C]";
+                                const when = new Date(a.created_at).toLocaleString();
+
+                                return (
+                                  <div
+                                    key={a.id}
+                                    className="flex items-start justify-between gap-3 border-t border-[#F1E7E7] pt-2 first:border-t-0 first:pt-0"
+                                  >
+                                    <div className="min-w-0">
+                                      <div className="text-sm text-[#111111]">
+                                        {reasonLabel(a.reason)}
+                                      </div>
+                                      {a.note ? (
+                                        <div className="text-xs text-[#5B4B4B] truncate">
+                                          {a.note}
+                                        </div>
+                                      ) : null}
+                                      <div className="text-xs text-[#8A7B7B]">{when}</div>
+                                    </div>
+
+                                    <div className={`text-sm font-semibold ${deltaClass}`}>
+                                      {deltaText}
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Tap counter + preview */}
+                        <div className="grid grid-cols-3 gap-2 items-end">
+                          <button
+                            type="button"
+                            className="rounded-xl px-3 py-3 text-xl font-semibold bg-[#FDECEC] border border-[#FCA5A5] text-[#7F1D1D] active:scale-[0.97]"
+                            onClick={() => setInvDelta((d) => Math.min(d - 1, 0))}
+                          >
+                            –
+                          </button>
+
+                          <div className="rounded-xl border border-[#E8D9D9] bg-white px-3 py-2 text-center">
+                            <div className={`text-2xl font-bold ${previewColor}`}>
+                              {previewText}
+                            </div>
+                            <div className="text-[11px] text-[#5B4B4B]">
+                              {invOnHand == null ? "result —" : `result ${resultingOnHand}`}
+                            </div>
+                          </div>
+
+                          <button
+                            type="button"
+                            className="rounded-xl px-3 py-3 text-xl font-semibold bg-[#EAF6EF] border border-[#86EFAC] text-[#166534] active:scale-[0.97]"
+                            onClick={() => setInvDelta((d) => Math.max(d + 1, 0))}
+                          >
+                            +
+                          </button>
+                        </div>
+
+                        {/* Reason + Note */}
+                        <div className="grid grid-cols-2 gap-2">
+                          <div className="col-span-1">
+                            <div className={`text-xs ${textMuted} mb-1`}>Reason</div>
+                            <select
+                              className={inputStyle}
+                              value={invReason}
+                              onChange={(e) => setInvReason(e.target.value)}
+                            >
+                              {REASONS.map((r) => (
+                                <option key={r.value} value={r.value}>
+                                  {r.label}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+
+                          <div className="col-span-1">
+                            <div className={`text-xs ${textMuted} mb-1`}>Note</div>
+                            <input
+                              className={inputStyle}
+                              value={invNote}
+                              onChange={(e) => setInvNote(e.target.value)}
+                              placeholder="Optional"
+                            />
+                          </div>
+                        </div>
+
+                        {/* Submit */}
+                        <button className={btnBlue} onClick={submitAdjustment} disabled={!canSubmit}>
+                          {t("confirm_change")}
+                        </button>
+                      </>
+                    )}
+                    
+                    {invStep === "receive" && (
+                      <div className="space-y-3">
+                        {/* Where it is now */}
+                        <div className="rounded-xl border border-[#E8D9D9] bg-white p-3">
+                          <div className="text-sm font-semibold text-[#111111]">{t("availability")}</div>
+
+                          {locBalances.length === 0 ? (
+                            <div className="text-sm text-[#5B4B4B] mt-1">{t("no_stock_any_location")}</div>
+                          ) : (
+                            <div className="mt-2 space-y-2">
+                              {locBalances
+                                .filter((x) => x.on_hand > 0)
+                                .sort((a, b) => b.on_hand - a.on_hand)
+                                .map((x) => (
+                                  <div key={x.location_id} className="flex items-center justify-between">
+                                    <div className="text-sm text-[#111111]">{x.location_code ?? x.location_id}</div>
+                                    <div className="text-sm font-semibold">{x.on_hand}</div>
+                                  </div>
+                                ))}
+                            </div>
+                          )}
+                        </div>
+                        <div>
+                          <div className={`text-xs ${textMuted} mb-1`}>{t("to_location")}</div>
+                          <select
+                            className={inputStyle}
+                            value={receiveToLoc}
+                            onChange={(e) => setReceiveToLoc(e.target.value)}
+                            disabled={locations.length === 0}
+                          >
+                            <option value="">Select location</option>
+                            {locations.map((l) => (
+                              <option key={l.id} value={l.id}>{l.location_code}</option>
+                            ))}
+                          </select>
+                        </div>
+
+                        {!batchMode ? (
+                          <div>
+                            <div className={`text-xs ${textMuted} mb-1`}>{t("qty")}</div>
+                            <input
+                              className={inputStyle}
+                              type="number"
+                              min={1}
+                              value={receiveQty}
+                              onChange={(e) => setReceiveQty(Math.max(1, Number(e.target.value) || 1))}
+                            />
+                          </div>
+                        ) : (
+                          <div className="text-xs text-[#5B4B4B]">
+                            Total units:{" "}
+                            <span className="font-semibold">
+                              {cartLines.reduce((s, x) => s + x.qty, 0)}
+                            </span>
+                            {" · "}
+                            Lines: <span className="font-semibold">{cartLines.length}</span>
+                          </div>
+                        )}
+
+                        <button
+                          className={btnBlue}
+                          type="button"
+                          onClick={batchMode ? submitReceiveBatch : submitReceive}  
+                          disabled={batchMode ? !receiveToLoc || cartLines.length === 0 : !canReceive}
+                        >
+                          {batchMode ? "Submit receive" : t("confirm_receive")}
+                        </button>
+                      </div>
+                    )}
+
+                    {invStep === "send" && (
+                      <div className="space-y-3">
+                        {/* show balances like “Where it is” panel */}
+                        <div className="rounded-xl border border-[#E8D9D9] bg-white p-3">
+                          <div className="text-sm font-semibold text-[#111111]">{t("availability")}</div>
+                          {locBalances.length === 0 ? (
+                            <div className="text-sm text-[#5B4B4B] mt-1">{t("no_stock_any_location")}</div>
+                          ) : (
+                            <div className="mt-2 space-y-2">
+                              {locBalances
+                                .filter((x) => x.on_hand > 0)
+                                .sort((a, b) => b.on_hand - a.on_hand)
+                                .map((x) => (
+                                  <div key={x.location_id} className="flex items-center justify-between">
+                                    <div className="text-sm text-[#111111]">{x.location_code ?? x.location_id}</div>
+                                    <div className="text-sm font-semibold">{x.on_hand}</div>
+                                  </div>
+                                ))}
+                            </div>
+                          )}
+                        </div>
+
+                        <div>
+                          <div className={`text-xs ${textMuted} mb-1`}>From location</div>
+                          <select
+                            className={inputStyle}
+                            value={sendFromLoc ?? ""}
+                            onChange={(e) => setSendFromLoc(e.target.value || "")}
+                            disabled={(locBalances ?? []).filter((x) => Number(x.on_hand ?? 0) > 0).length === 0}
+                          >
+                            <option value="">Select location</option>
+                            {(locBalances ?? [])
+                              .filter((x) => Number(x.on_hand ?? 0) > 0)
+                              .sort((a, b) => Number(b.on_hand ?? 0) - Number(a.on_hand ?? 0))
+                              .map((x) => (
+                                <option key={x.location_id} value={x.location_id}>
+                                  {x.location_code ?? x.location_id} ({x.on_hand})
+                                </option>
+                              ))}
+                          </select>
+                        </div>
+                        {!batchMode ? (
+                          <div>
+                            <div className={`text-xs ${textMuted} mb-1`}> {t("qty")}</div>
+                            <input
+                              className={inputStyle}
+                              type="number"
+                              min={1}
+                              value={sendQty}
+                              onChange={(e) => setSendQty(Math.max(1, Number(e.target.value) || 1))}
+                            />
+                          </div>
+                        ) : (
+                          <div className="text-xs text-[#5B4B4B]">
+                            Total units:{" "}
+                            <span className="font-semibold">
+                              {cartLines.reduce((s, x) => s + x.qty, 0)}
+                            </span>
+                            {" · "}
+                            Lines: <span className="font-semibold">{cartLines.length}</span>
+                          </div>
+                        )}
+
+                        <button
+                          className={btnBlue}
+                          type="button"
+                          onClick={batchMode ? submitSendBatch : submitSend}
+                          disabled={batchMode ? !sendFromLoc || cartLines.length === 0 : !canSend}
+                        >
+                          {batchMode ? "Submit send" : t("confirm_send")}
+                        </button>
+                      </div>
+                    )}
+
+                    {invStep === "transfer" && (
+                      <div className="space-y-3">
+                        {/* Where it is now */}
+                        <div className="rounded-xl border border-[#E8D9D9] bg-white p-3">
+                          <div className="text-sm font-semibold text-[#111111]">{t("availability")}</div>
+
+                          {locBalances.length === 0 ? (
+                            <div className="text-sm text-[#5B4B4B] mt-1">{t("no_stock_any_location")}</div>
+                          ) : (
+                            <div className="mt-2 space-y-2">
+                              {locBalances
+                                .filter((x) => x.on_hand > 0)
+                                .sort((a, b) => b.on_hand - a.on_hand)
+                                .map((x) => (
+                                  <div key={x.location_id} className="flex items-center justify-between">
+                                    <div className="text-sm text-[#111111]">{x.location_code ?? x.location_id}</div>
+                                    <div className="text-sm font-semibold">{x.on_hand}</div>
+                                  </div>
+                                ))}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Recent moves */}
+                        <div className="rounded-xl border border-[#E8D9D9] bg-white p-3">
+                          <div className="text-sm font-semibold text-[#111111]">{t("recent_activities")}</div>
+
+                          {invMoves.length === 0 ? (
+                            <div className="text-sm text-[#5B4B4B] mt-1">No moves yet.</div>
+                          ) : (
+                            <div className="mt-2 space-y-2">
+                              {invMoves.map((m) => {
+                                const when = new Date(m.created_at).toLocaleString();
+                                const fromCode = m.from_location?.location_code ?? m.from_location_id;
+                                const toCode = m.to_location?.location_code ?? m.to_location_id;
+
+                                return (
+                                  <div
+                                    key={m.id}
+                                    className="flex items-start justify-between gap-3 border-t border-[#F1E7E7] pt-2 first:border-t-0 first:pt-0"
+                                  >
+                                    <div className="min-w-0">
+                                      <div className="text-sm text-[#111111]">
+                                        (<span className="font-semibold">{m.quantity}</span>) {fromCode} → {toCode}
+                                      </div>
+                                      {m.note ? (
+                                        <div className="text-xs text-[#5B4B4B] truncate">{m.note}</div>
+                                      ) : null}
+                                      <div className="text-xs text-[#8A7B7B]">{when}</div>
+                                    </div>
+
+                                    <div className="text-sm font-semibold text-[#111111]">
+                                      {m.qty}
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Move form */}
+                        <div className="grid grid-cols-2 gap-2">
+                          {/* FROM */}
+                          <div className="col-span-1">
+                            <div className={`text-xs ${textMuted} mb-1`}>From</div>
+                            <select
+                              className={inputStyle}
+                              value={fromLoc}
+                              onChange={(e) => setFromLoc(e.target.value)}
+                              disabled={(locBalances ?? []).filter((x) => Number(x.on_hand ?? 0) > 0).length === 0}
+                            >
+                              <option value="">Select location</option>
+
+                              {(locBalances ?? [])
+                                .filter((x) => Number(x.on_hand ?? 0) > 0)
+                                .sort((a, b) => Number(b.on_hand ?? 0) - Number(a.on_hand ?? 0))
+                                .map((x) => (
+                                  <option key={x.location_id} value={x.location_id}>
+                                    {x.location_code ?? x.location_id} ({x.on_hand})
+                                  </option>
+                                ))}
+                            </select>
+                          </div>
+
+                          {/* TO */}
+                          <div className="col-span-1">
+                            <div className={`text-xs ${textMuted} mb-1`}>To</div>
+
+                            <select
+                              className={inputStyle}
+                              value={toLoc}
+                              onChange={(e) => setToLoc(e.target.value)}
+                              disabled={locations.length === 0}
+                            >
+                              <option value="">Select location</option>
+
+                              {locations
+                                .filter((l) => !fromLoc || l.id !== fromLoc) // optional: prevent choosing same as From
+                                .map((l) => (
+                                  <option key={l.id} value={l.id}>
+                                    {l.location_code}
+                                  </option>
+                                ))}
+                            </select>
+                          </div>
+                        </div>
+
+
+                        <div>
+                          <div className={`text-xs ${textMuted} mb-1`}>{t("qty")}</div>
+                          <input
+                            className={inputStyle}
+                            type="number"
+                            min={1}
+                            value={moveQty}
+                            onChange={(e) => setMoveQty(Math.max(1, Number(e.target.value) || 1))}
+                          />
+                        </div>
+
+                        <button
+                          className={btnBlue}
+                          type="button"
+                          onClick={batchMode ? submitTransferBatch : submitMove}
+                          disabled={
+                            batchMode
+                              ? !fromLoc || !toLoc || fromLoc === toLoc || cartLines.length === 0
+                              : !fromLoc || !toLoc || fromLoc === toLoc || moveQty < 1
+                          }
+                        >
+                          {batchMode ? "Submit transfer" : t("confirm_move")}
+                        </button>
+                      </div>
+                    )}
+
+                    {invSuccess && (
+                      <p className="text-sm text-[#166534] whitespace-pre-line">{invSuccess}</p>
+                    )}
+
+                    {invError && (
+                      <p className="text-sm text-[#B42318] whitespace-pre-line">
+                        {invError}
+                      </p>
+                    )}
+
+                    {/* Space fillers */}
+                    <div className={`text-xs ${textMuted}`}>
+                      Tip: For monthly cycle checks, keep reason as{" "}
+                      <span className="font-medium">monthly_cycle_count</span> and write your
+                      counted details in Note.
+                    </div>
+                  </div>
+                ) : (
+                  <div className={`p-5 ${surface}`}>
+                    <div className={`text-sm ${textMuted}`}>
+                      Scan a product or search to begin.
+                    </div>
                   </div>
                 )}
-
-                {invSuccess && (
-                  <p className="text-sm text-[#166534] whitespace-pre-line">{invSuccess}</p>
-                )}
-
-                {invError && (
-                  <p className="text-sm text-[#B42318] whitespace-pre-line">
-                    {invError}
-                  </p>
-                )}
-
-                {/* Space fillers */}
-                <div className={`text-xs ${textMuted}`}>
-                  Tip: For monthly cycle checks, keep reason as{" "}
-                  <span className="font-medium">monthly_cycle_count</span> and write your
-                  counted details in Note.
-                </div>
-              </div>
-            ) : (
-              <div className={`p-5 ${surface}`}>
-                <div className={`text-sm ${textMuted}`}>
-                  Scan a product or search to begin.
-                </div>
-              </div>
+              </>
             )}
           </div>
         )}
