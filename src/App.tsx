@@ -112,6 +112,7 @@ export default function App() {
   // Batch Mode 
   const invScanBusyRef = useRef(false);
   const lastScanRef = useRef<{ code: string; ts: number }>({ code: "", ts: 0 });
+  const [cartOpen, setCartOpen] = useState(false);
 
   // Chime audio
   const playChime = () => {
@@ -729,7 +730,11 @@ export default function App() {
     "hover:border-[#2B0909] " +
     "focus:outline-none focus:ring-2 focus:ring-[#2B0909]";
 
+  const btnToggleChipActive =
+  "rounded-xl px-3 py-2 text-sm font-semibold bg-[#2B0909] text-white border-2 border-[#2B0909]";
 
+  const btnToggleChipInactive =
+    "rounded-xl px-3 py-2 text-sm font-medium bg-white text-[#2B0909] border-2 border-[#C9B6B6] hover:border-[#2B0909]";
 
   // ---------- Auth ----------
   useEffect(() => {
@@ -1140,7 +1145,7 @@ export default function App() {
               <img
                 src="/logo.JPEG"
                 alt="Company logo"
-                className="w-full h-full object-cover scale-110"
+                className="w-full h-full object-cover scale-90"
               />
             </div>
 
@@ -1281,7 +1286,7 @@ export default function App() {
         )}
 
         {/* Shared scan panel */}
-        {(mode === "scan" || (mode === "inventory" && invEntry === "scan")) &&  (
+        {mode === "scan" &&  (
           <div className={`p-5 space-y-3 ${surface}`}>
             <button
               className={btnPrimary}
@@ -1328,6 +1333,33 @@ export default function App() {
         {/* Inventory mode panel */}
         {mode === "inventory" && (
           <div className="space-y-4">
+            <div className="flex gap-2">
+              <button
+                type="button"
+                className={invEntry === "search" ? btnToggleChipActive : btnToggleChipInactive}
+                onClick={async () => {
+                  await stopScan();
+                  setInvEntry("search");
+                  setScanError(null);
+                  setInvSearchError(null);
+                }}
+              >
+                Manual
+              </button>
+
+              <button
+                type="button"
+                className={invEntry === "scan" ? btnToggleChipActive : btnToggleChipInactive}
+                onClick={() => {
+                  setInvEntry("scan");
+                  setScanError(null);
+                  setInvSearchError(null);
+                  startScan("inventory");
+                }}
+              >
+                Camera
+              </button>
+            </div>
             {invStep === "menu" && (
               <div className={`p-5 space-y-3 ${surface}`}>
                 <div className="text-base font-semibold">Inventory actions</div>
@@ -1397,85 +1429,89 @@ export default function App() {
             {invStep !== "menu" && (
               <>
                 {/* --- Top: two input containers --- */}
-                <div className="grid gap-4 md:grid-cols-2">
-                  {/* Manual lookup container */}
-                  <div className={`p-5 space-y-3 ${surface}`}>
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <div className="text-base font-semibold">{t("manual_lookup")}</div>
-                        <div className={`text-xs ${textMuted}`}>
-                          Enter a product code like RB-10-02-16
+                {!invProductCode && (
+                  <div className="grid gap-3">
+                    {invEntry  === "search" ? (
+                    /* Manual lookup container */
+                      <div className={`p-5 space-y-2 ${surface}`}>
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <div className="text-base font-semibold">{t("manual_lookup")}</div>
+                            <div className={`text-xs ${textMuted}`}>
+                              Enter a product code like RB-10-02-16
+                            </div>
+                          </div>
                         </div>
+
+                        <div className="flex gap-2">
+                          <input
+                            className={inputStyle}
+                            value={invSearchCode}
+                            onChange={(e) => {
+                              setInvSearchCode(e.target.value);
+                              setInvSearchError(null);
+                            }}
+                            placeholder="RB-10-02-16"
+                            autoCapitalize="characters"
+                            autoCorrect="off"
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") handleInventorySearch();
+                            }}
+                          />
+
+                          <button
+                            type="button"
+                            className={btnSecondary}
+                            onClick={handleInventorySearch}
+                            disabled={invSearchBusy}
+                          >
+                            {invSearchBusy ? "Searching…" : "Search"}
+                          </button>
+                        </div>
+
+                        {invSearchError && (
+                          <p className="text-sm text-[#B42318] whitespace-pre-line">
+                            {invSearchError}
+                          </p>
+                        )}
                       </div>
-                    </div>
+                    ) : ( 
+                      /* Camera scan container */
+                      <div className={`p-5 space-y-2 ${surface}`}>
+                        <div>
+                          <div className="text-base font-semibold">{t("camera_scan")}</div>
+                          <div className={`text-xs ${textMuted}`}>
+                            Scan the QR label to load the product
+                          </div>
+                        </div>
 
-                    <div className="flex gap-2">
-                      <input
-                        className={inputStyle}
-                        value={invSearchCode}
-                        onChange={(e) => {
-                          setInvSearchCode(e.target.value);
-                          setInvSearchError(null);
-                        }}
-                        placeholder="RB-10-02-16"
-                        autoCapitalize="characters"
-                        autoCorrect="off"
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") handleInventorySearch();
-                        }}
-                      />
+                        <button
+                          className={btnPrimary}
+                          onClick={() => startScan("inventory")}
+                          disabled={isScanning}
+                          type="button"
+                        >
+                          {isScanning ? "Scanning…" : "Open camera & scan QR"}
+                        </button>
 
-                      <button
-                        type="button"
-                        className={btnSecondary}
-                        onClick={handleInventorySearch}
-                        disabled={invSearchBusy}
-                      >
-                        {invSearchBusy ? "Searching…" : "Search"}
-                      </button>
-                    </div>
+                        {isScanning && (
+                          <button className={btnSecondary} onClick={stopScan} type="button">
+                            Stop scanning
+                          </button>
+                        )}
 
-                    {invSearchError && (
-                      <p className="text-sm text-[#B42318] whitespace-pre-line">
-                        {invSearchError}
-                      </p>
+                        {/* Keep this always mounted in inventory mode for scanning */}
+                        <div id={regionId} className="w-full overflow-hidden rounded-xl" />
+
+                        {scanError && (
+                          <p className="text-sm text-[#B42318] whitespace-pre-line">
+                            {scanError}
+                          </p>
+                        )}
+                      </div>
                     )}
                   </div>
-
-                  {/* Camera scan container */}
-                  <div className={`p-5 space-y-3 ${surface}`}>
-                    <div>
-                      <div className="text-base font-semibold">{t("camera_scan")}</div>
-                      <div className={`text-xs ${textMuted}`}>
-                        Scan the QR label to load the product
-                      </div>
-                    </div>
-
-                    <button
-                      className={btnPrimary}
-                      onClick={() => startScan("inventory")}
-                      disabled={isScanning}
-                      type="button"
-                    >
-                      {isScanning ? "Scanning…" : "Open camera & scan QR"}
-                    </button>
-
-                    {isScanning && (
-                      <button className={btnSecondary} onClick={stopScan} type="button">
-                        Stop scanning
-                      </button>
-                    )}
-
-                    {/* Keep this always mounted in inventory mode for scanning */}
-                    <div id={regionId} className="w-full overflow-hidden rounded-xl" />
-
-                    {scanError && (
-                      <p className="text-sm text-[#B42318] whitespace-pre-line">
-                        {scanError}
-                      </p>
-                    )}
-                  </div>
-                </div>
+                )}
 
                 {/* --- Below: product details & adjustments (only after product selected) --- */}
 
@@ -1518,14 +1554,52 @@ export default function App() {
                         Back
                       </button>
                     </div>
-                    {/* Image */}
-                    {invImageUrl && (
-                      <img
-                        src={invImageUrl}
-                        alt="Product"
-                        className="w-full rounded-xl border border-[#E8D9D9]"
-                      />
-                    )}
+                    <div className="grid grid-cols-2 gap-3 items-start">
+                      {/* Product image (smaller) */}
+                      <div className="rounded-xl border border-[#E8D9D9] bg-white overflow-hidden">
+                        {invImageUrl ? (
+                          <img
+                            src={invImageUrl}
+                            alt="Product"
+                            className="w-full h-40 object-cover"  // smaller height
+                          />
+                        ) : (
+                          <div className="h-40 flex items-center justify-center text-xs text-[#8A7B7B]">
+                            No image
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Camera box (same card) */}
+                      <div className="rounded-xl border border-[#E8D9D9] bg-white p-2">
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="text-xs text-[#5B4B4B]">
+                            {batchMode ? "Batch scanning" : "Scan to load"}
+                          </div>
+
+                          {!isScanning ? (
+                            <button
+                              type="button"
+                              className="text-xs underline text-[#2B0909]"
+                              onClick={() => startScan("inventory")}
+                            >
+                              Start
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              className="text-xs underline text-[#B42318]"
+                              onClick={stopScan}
+                            >
+                              Stop
+                            </button>
+                          )}
+                        </div>
+
+                        <div id={regionId} className="w-full overflow-hidden rounded-xl min-h-[120px]" />
+                      </div>
+                    </div>
+                    
                     <div className="flex items-start justify-between gap-3">
                       <div>
                         <div className={`text-sm ${textMuted}`}>Product code</div>
@@ -1543,7 +1617,14 @@ export default function App() {
                     {invStep !== "adjust" && batchMode && (
                       <div className="rounded-xl border border-[#E8D9D9] bg-white p-3">
                         <div className="flex items-center justify-between">
-                          <div className="text-sm font-semibold text-[#111111]">Cart</div>
+                          <button
+                            type="button"
+                            className="text-sm font-semibold text-[#111111] underline"
+                            onClick={() => setCartOpen((v) => !v)}
+                          >
+                            Cart ({cartLines.length} lines · {cartTotalUnits} units)
+                          </button>
+
                           <button
                             type="button"
                             className="text-xs underline text-[#5B4B4B]"
@@ -1552,9 +1633,12 @@ export default function App() {
                             Clear
                           </button>
                         </div>
-
-                        {cartLines.length === 0 ? (
-                          <div className="text-sm text-[#5B4B4B] mt-1">Scan items to add them here.</div>
+                        {!cartOpen ? (
+                          <div className="text-xs text-[#5B4B4B] mt-2">
+                            Tip: Keep scanning to add. Tap “Cart” to edit quantities.
+                          </div>
+                        ) : cartLines.length === 0 ? (
+                          <div className="text-sm text-[#5B4B4B] mt-2">Scan items to add them here.</div>
                         ) : (
                           <div className="mt-2 space-y-2">
                             {cartLines.map((line) => (
@@ -1622,14 +1706,13 @@ export default function App() {
 
                         <button
                           type="button"
-                          className={batchMode ? btnToggleActive : btnToggleInactive}
+                          className={btnChip}
                           onClick={() => {
                             setBatchMode((b) => !b);
-                            setInvError(null);
-                            setInvSuccess(null);
+                            setCartOpen(false);
                           }}
                         >
-                          {batchMode ? "Batch ON" : "Batch OFF"}
+                          {batchMode ? "Batch: ON" : "Batch: OFF"}
                         </button>
                       </div>
                     )}
