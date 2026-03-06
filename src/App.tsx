@@ -484,18 +484,10 @@ export default function App() {
     });
   };
 
-  const updateCartQty = (code: string, qty: number) => {
-    const q = Math.max(1, Number(qty) || 1);
-    setCartLines((prev) => prev.map((x) => (x.product_code === code ? { ...x, qty: q } : x)));
-  };
-
-  const removeFromCart = (code: string) => {
-    setCartLines((prev) => prev.filter((x) => x.product_code !== code));
-  };
-
   const clearCart = () => setCartLines([]);
 
   const cartTotalUnits = cartLines.reduce((s, x) => s + (Number(x.qty) || 0), 0);
+
 
   // handles Scan mode scan after render
   useEffect(() => {
@@ -610,6 +602,9 @@ export default function App() {
       }
     };
 
+
+  
+    
   // Online offline 
   const [isOnline, setIsOnline] = useState<boolean>(() => navigator.onLine);
 
@@ -1104,6 +1099,86 @@ export default function App() {
     if (!adjErr) setInvAdjustments((adjRows ?? []) as Adjustment[]);
   };
 
+  // Summary Helper
+  const currentActionLabel =
+    invStep === "receive"
+      ? "Receive"
+      : invStep === "send"
+      ? "Send"
+      : invStep === "transfer"
+      ? "Transfer"
+      : "Adjust";
+
+  const currentSubmitLabel =
+    invStep === "receive"
+      ? batchMode
+        ? "Submit receive"
+        : t("confirm_receive")
+      : invStep === "send"
+      ? batchMode
+        ? "Submit send"
+        : t("confirm_send")
+      : invStep === "transfer"
+      ? batchMode
+        ? "Submit transfer"
+        : t("confirm_move")
+      : t("confirm_change");
+
+  const stickySummary =
+    batchMode && invStep !== "adjust"
+      ? `${cartLines.length} lines · ${cartTotalUnits} units`
+      : invProductCode
+      ? invProductCode
+      : "No item selected";
+
+  // Sticky Submit
+  const stickySubmitHandler =
+    invStep === "receive"
+      ? batchMode
+        ? submitReceiveBatch
+        : submitReceive
+      : invStep === "send"
+      ? batchMode
+        ? submitSendBatch
+        : submitSend
+      : invStep === "transfer"
+      ? batchMode
+        ? submitTransferBatch
+        : submitMove
+      : submitAdjustment;
+
+  // Disabled-state Selector
+  const stickySubmitDisabled =
+    invStep === "receive"
+      ? batchMode
+        ? !receiveToLoc || cartLines.length === 0 || invSubmitting
+        : !canReceive || invSubmitting
+      : invStep === "send"
+      ? batchMode
+        ? !sendFromLoc || cartLines.length === 0 || invSubmitting
+        : !canSend || invSubmitting
+      : invStep === "transfer"
+      ? batchMode
+        ? !fromLoc || !toLoc || fromLoc === toLoc || cartLines.length === 0 || invSubmitting
+        : !fromLoc || !toLoc || fromLoc === toLoc || moveQty < 1 || invSubmitting
+      : !canSubmit || invSubmitting;
+
+  // Sticky Secondary Summary
+  const stickySecondarySummary =
+    invStep === "receive"
+      ? receiveToLoc
+        ? `To selected`
+        : `Choose To location`
+      : invStep === "send"
+      ? sendFromLoc
+        ? `From selected`
+        : `Choose From location`
+      : invStep === "transfer"
+      ? fromLoc && toLoc
+        ? `Route selected`
+        : `Choose route`
+      : "";
+
   // Loading Recent Moving History 
   const loadRecentMoves = async (productCode: string) => {
     const { data, error } = await supabase
@@ -1443,7 +1518,7 @@ export default function App() {
               </div>
             )}
             {invStep !== "menu" && (
-              <>
+              <div className="space-y-4 pb-28">
  
                 {/* --- Top: two input containers --- */}
                 {!invProductCode && (
@@ -1897,15 +1972,6 @@ export default function App() {
                             Lines: <span className="font-semibold">{cartLines.length}</span>
                           </div>
                         )}
-
-                        <button
-                          className={btnBlue}
-                          type="button"
-                          onClick={batchMode ? submitReceiveBatch : submitReceive}  
-                          disabled={batchMode ? !receiveToLoc || cartLines.length === 0 : !canReceive}
-                        >
-                          {batchMode ? "Submit receive" : t("confirm_receive")}
-                        </button>
                       </div>
                     )}
 
@@ -1971,15 +2037,6 @@ export default function App() {
                             Lines: <span className="font-semibold">{cartLines.length}</span>
                           </div>
                         )}
-
-                        <button
-                          className={btnBlue}
-                          type="button"
-                          onClick={batchMode ? submitSendBatch : submitSend}
-                          disabled={batchMode ? !sendFromLoc || cartLines.length === 0 : !canSend}
-                        >
-                          {batchMode ? "Submit send" : t("confirm_send")}
-                        </button>
                       </div>
                     )}
 
@@ -2102,19 +2159,6 @@ export default function App() {
                             onChange={(e) => setMoveQty(Math.max(1, Number(e.target.value) || 1))}
                           />
                         </div>
-
-                        <button
-                          className={btnBlue}
-                          type="button"
-                          onClick={batchMode ? submitTransferBatch : submitMove}
-                          disabled={
-                            batchMode
-                              ? !fromLoc || !toLoc || fromLoc === toLoc || cartLines.length === 0
-                              : !fromLoc || !toLoc || fromLoc === toLoc || moveQty < 1
-                          }
-                        >
-                          {batchMode ? "Submit transfer" : t("confirm_move")}
-                        </button>
                       </div>
                     )}
 
@@ -2142,7 +2186,32 @@ export default function App() {
                     </div>
                   </div>
                 )}
-              </>
+              </div>
+            )}
+            {/* Sticky bottom */}
+            {invStep !== "adjust" && (
+              <div className="fixed bottom-0 left-0 right-0 z-40 border-t border-[#E8D9D9] bg-[#FBF7F6]/95 backdrop-blur">
+                <div className="max-w-md mx-auto p-3">
+                  <div className="rounded-2xl border border-[#E0CACA] bg-white shadow-sm px-3 py-3 flex items-center gap-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="text-xs text-[#5B4B4B]">{currentActionLabel}</div>
+                      <div className="text-sm font-semibold text-[#111111] truncate">
+                        {stickySummary}
+                      </div>
+                      <div className="text-xs text-[#8A7B7B] truncate">{stickySecondarySummary}</div>
+                    </div>
+
+                    <button
+                      type="button"
+                      className="rounded-xl px-4 py-3 font-semibold text-white bg-[#2563EB] active:scale-[0.99] disabled:opacity-60"
+                      onClick={stickySubmitHandler}
+                      disabled={stickySubmitDisabled}
+                    >
+                      {invSubmitting ? "Submitting..." : currentSubmitLabel}
+                    </button>
+                  </div>
+                </div>
+              </div>
             )}
           </div>
         )}
