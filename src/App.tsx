@@ -38,7 +38,7 @@ const LOCATIONS_TABLE = "locations_test";
 const LOC_ON_HAND_TABLE = "inventory_on_hand_by_location_test";
 // const MOVE_RPC = "move_inventory_test";
 const MOVEMENTS_TABLE = "inventory_movements_test"; // optional if you want to show recent moves
-const ADJUST_LOC_RPC = "adjust_inventory_by_location_test"; // you’ll create in Supabase
+// const ADJUST_LOC_RPC = "adjust_inventory_by_location_test"; // you’ll create in Supabase
 // const LOC_ADJUSTMENTS_TABLE = "inventory_adjustments_by_location_test"; // ledger
 
 
@@ -435,13 +435,13 @@ export default function App() {
 
   type Movement = {
     id: number;
-    qty: number;
+    quantity: number;
     note: string | null;
     created_at: string;
-    from_location_id: string;
-    to_location_id: string;
-    from_location?: { location_code: string } | null;
-    to_location?: { location_code: string } | null;
+    from_location_id: number | null;
+    to_location_id: number | null;
+    from_location?: { location_code: string }[] | null;
+    to_location?: { location_code: string }[] | null;
   };
 
   const [invMoves, setInvMoves] = useState<Movement[]>([]);
@@ -640,19 +640,6 @@ export default function App() {
     "border-2 border-[#C9B6B6] " +
     "focus:outline-none focus:ring-2 focus:ring-[#2B0909] focus:border-[#2B0909] " +
     "hover:border-[#9F7A7A] transition";
-
-  const btnToggleActive =
-    "w-full rounded-xl px-4 py-2 font-semibold " +
-    "bg-[#2B0909] text-white " +
-    "border-2 border-[#2B0909] " +
-    "focus:outline-none focus:ring-2 focus:ring-[#2B0909]";
-
-  const btnToggleInactive =
-    "w-full rounded-xl px-4 py-2 font-medium " +
-    "bg-white text-[#2B0909] " +
-    "border-2 border-[#C9B6B6] " +
-    "hover:border-[#2B0909] " +
-    "focus:outline-none focus:ring-2 focus:ring-[#2B0909]";
 
   const btnToggleChipActive =
   "rounded-xl px-3 py-2 text-sm font-semibold bg-[#2B0909] text-white border-2 border-[#2B0909]";
@@ -1203,7 +1190,18 @@ export default function App() {
       return;
     }
 
-    setInvMoves((data ?? []) as Movement[]);
+    setInvMoves(
+      (data ?? []).map((row) => ({
+        id: row.id,
+        quantity: row.quantity,
+        note: row.note,
+        created_at: row.created_at,
+        from_location_id: row.from_location_id,
+        to_location_id: row.to_location_id,
+        from_location: row.from_location,
+        to_location: row.to_location,
+      }))
+    );
   };
 
 
@@ -2073,8 +2071,8 @@ export default function App() {
                             <div className="mt-2 space-y-2">
                               {invMoves.map((m) => {
                                 const when = new Date(m.created_at).toLocaleString();
-                                const fromCode = m.from_location?.location_code ?? m.from_location_id;
-                                const toCode = m.to_location?.location_code ?? m.to_location_id;
+                                const fromCode = m.from_location?.[0]?.location_code ?? m.from_location_id;
+                                const toCode = m.to_location?.[0]?.location_code ?? m.to_location_id;
 
                                 return (
                                   <div
@@ -2092,7 +2090,7 @@ export default function App() {
                                     </div>
 
                                     <div className="text-sm font-semibold text-[#111111]">
-                                      {m.qty}
+                                      {m.quantity}
                                     </div>
                                   </div>
                                 );
