@@ -35,7 +35,7 @@ const ON_HAND_TABLE = "inventory_on_hand_test";
 const ADJUST_RPC = "adjust_inventory_test";
 
 const LOCATIONS_TABLE = "locations_test";
-const LOC_ON_HAND_TABLE = "inventory_on_hand_by_location_test";
+const LOC_ON_HAND_TABLE = "inventory_availability_view";
 // const MOVE_RPC = "move_inventory_test";
 const MOVEMENTS_TABLE = "inventory_movements_test"; // optional if you want to show recent moves
 // const ADJUST_LOC_RPC = "adjust_inventory_by_location_test"; // you’ll create in Supabase
@@ -172,10 +172,11 @@ export default function App() {
     setInvOnHand(invRow?.on_hand ?? 0);
   };
 
+
   const refreshLocBalances = async (productCode: string) => {
     const { data, error: locErr } = await supabase
-      .from(LOC_ON_HAND_TABLE)
-      .select("location_id, on_hand, locations_test(location_code)")
+      .from("inventory_availability_view")
+      .select("location_id, location_code, location_name, on_hand")
       .eq("product_code", productCode)
       .order("on_hand", { ascending: false });
 
@@ -185,7 +186,8 @@ export default function App() {
       (data ?? []).map((r: any) => ({
         location_id: r.location_id,
         on_hand: r.on_hand,
-        location_code: r.locations_test?.location_code ?? r.location_id,
+        location_code: r.location_code,
+        location_name: r.location_name,
       }))
     );
   };
@@ -401,6 +403,7 @@ export default function App() {
   const [locBalances, setLocBalances] = useState<{
     location_id: string;
     on_hand: number;
+    location_name?: string | null;
     location_code?: string;
   }[]>([]);
 
@@ -1781,7 +1784,11 @@ export default function App() {
                                 .sort((a, b) => b.on_hand - a.on_hand)
                                 .map((x) => (
                                   <div key={x.location_id} className="flex items-center justify-between">
-                                    <div className="text-sm text-[#111111]">{x.location_code ?? x.location_id}</div>
+                                    <div className="text-sm text-[#111111]">
+                                      {x.location_code && x.location_name
+                                        ? `${x.location_code} - ${x.location_name}`
+                                        : x.location_name ?? x.location_code ?? x.location_id}
+                                    </div>                                    
                                     <div className="text-sm font-semibold">{x.on_hand}</div>
                                   </div>
                                 ))}
