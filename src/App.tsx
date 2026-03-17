@@ -175,8 +175,8 @@ export default function App() {
 
   const refreshLocBalances = async (productCode: string) => {
     const { data, error: locErr } = await supabase
-      .from("inventory_availability_view")
-      .select("location_id, location_code, location_name, on_hand")
+      .from(LOC_ON_HAND_TABLE)
+      .select("location_id, product_code, location_name, on_hand")
       .eq("product_code", productCode)
       .order("on_hand", { ascending: false });
 
@@ -186,7 +186,6 @@ export default function App() {
       (data ?? []).map((r: any) => ({
         location_id: r.location_id,
         on_hand: r.on_hand,
-        location_code: r.location_code,
         location_name: r.location_name,
       }))
     );
@@ -404,7 +403,6 @@ export default function App() {
     location_id: string;
     on_hand: number;
     location_name?: string | null;
-    location_code?: string;
   }[]>([]);
 
 
@@ -431,6 +429,7 @@ export default function App() {
   type Location = {
     id: string;
     location_code: string;
+    location_name: string;
   };
   const [locations, setLocations] = useState<Location[]>([]);
 
@@ -441,12 +440,11 @@ export default function App() {
     quantity: number;
     note: string | null;
     created_at: string;
-    from_location_id: number | null;
-    to_location_id: number | null;
+    from_location_id: string | null;
+    to_location_id: string | null;
     from_location?: { location_code: string }[] | null;
     to_location?: { location_code: string }[] | null;
   };
-
   const [invMoves, setInvMoves] = useState<Movement[]>([]);
 
 
@@ -506,23 +504,29 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoStartMode, mode]);
 
-  // handle the options within Inventory mode
   useEffect(() => {
     if (mode !== "inventory") return;
-    
 
     const loadLocations = async () => {
       const { data, error } = await supabase
-        .from(LOCATIONS_TABLE)
-        .select("id, location_code")
-        .order("location_code", { ascending: true });
+        .from("locations_test")
+        .select("id, location_name, location_code")
+        .eq("is_active", true)
+        .order("location_name", { ascending: true });
 
       if (error) {
         console.error("locations load error", error);
         setLocations([]);
         return;
       }
-      setLocations(data ?? []);
+
+      setLocations(
+        (data ?? []).map((r: any) => ({
+          id: r.id,
+          location_name: r.location_name,
+          location_code: r.location_code,
+        }))
+      );
     };
 
     loadLocations();
@@ -1785,9 +1789,7 @@ export default function App() {
                                 .map((x) => (
                                   <div key={x.location_id} className="flex items-center justify-between">
                                     <div className="text-sm text-[#111111]">
-                                      {x.location_code && x.location_name
-                                        ? `${x.location_code} - ${x.location_name}`
-                                        : x.location_name ?? x.location_code ?? x.location_id}
+                                      {x.location_name ?? x.location_id}
                                     </div>                                    
                                     <div className="text-sm font-semibold">{x.on_hand}</div>
                                   </div>
@@ -1807,7 +1809,7 @@ export default function App() {
                               <option value="">Select location</option>
                               {locations.map((l) => (
                                 <option key={l.id} value={l.id}>
-                                  {l.location_code}
+                                  {l.location_name}
                                 </option>
                               ))}
                             </select>
@@ -1934,7 +1936,7 @@ export default function App() {
                                 .sort((a, b) => b.on_hand - a.on_hand)
                                 .map((x) => (
                                   <div key={x.location_id} className="flex items-center justify-between">
-                                    <div className="text-sm text-[#111111]">{x.location_code ?? x.location_id}</div>
+                                    <div className="text-sm text-[#111111]">{x.location_name ?? x.location_id}</div>
                                     <div className="text-sm font-semibold">{x.on_hand}</div>
                                   </div>
                                 ))}
@@ -1950,8 +1952,10 @@ export default function App() {
                             disabled={locations.length === 0}
                           >
                             <option value="">Select location</option>
-                            {locations.map((l) => (
-                              <option key={l.id} value={l.id}>{l.location_code}</option>
+                            {locations.map((x) => (
+                              <option key={x.id} value={x.id}>
+                                {x.location_name}
+                              </option>
                             ))}
                           </select>
                         </div>
@@ -1994,7 +1998,7 @@ export default function App() {
                                 .sort((a, b) => b.on_hand - a.on_hand)
                                 .map((x) => (
                                   <div key={x.location_id} className="flex items-center justify-between">
-                                    <div className="text-sm text-[#111111]">{x.location_code ?? x.location_id}</div>
+                                    <div className="text-sm text-[#111111]">{x.location_name ?? x.location_id}</div>
                                     <div className="text-sm font-semibold">{x.on_hand}</div>
                                   </div>
                                 ))}
@@ -2016,7 +2020,7 @@ export default function App() {
                               .sort((a, b) => Number(b.on_hand ?? 0) - Number(a.on_hand ?? 0))
                               .map((x) => (
                                 <option key={x.location_id} value={x.location_id}>
-                                  {x.location_code ?? x.location_id} ({x.on_hand})
+                                  {x.location_name ?? x.location_id} ({x.on_hand})
                                 </option>
                               ))}
                           </select>
@@ -2060,7 +2064,7 @@ export default function App() {
                                 .sort((a, b) => b.on_hand - a.on_hand)
                                 .map((x) => (
                                   <div key={x.location_id} className="flex items-center justify-between">
-                                    <div className="text-sm text-[#111111]">{x.location_code ?? x.location_id}</div>
+                                    <div className="text-sm text-[#111111]">{x.location_name ?? x.location_id}</div>
                                     <div className="text-sm font-semibold">{x.on_hand}</div>
                                   </div>
                                 ))}
@@ -2124,7 +2128,7 @@ export default function App() {
                                 .sort((a, b) => Number(b.on_hand ?? 0) - Number(a.on_hand ?? 0))
                                 .map((x) => (
                                   <option key={x.location_id} value={x.location_id}>
-                                    {x.location_code ?? x.location_id} ({x.on_hand})
+                                    {x.location_name ?? x.location_id} ({x.on_hand})
                                   </option>
                                 ))}
                             </select>
@@ -2143,10 +2147,10 @@ export default function App() {
                               <option value="">Select location</option>
 
                               {locations
-                                .filter((l) => !fromLoc || l.id !== fromLoc) // optional: prevent choosing same as From
+                                .filter((l) => !fromLoc || l.id !== fromLoc)
                                 .map((l) => (
                                   <option key={l.id} value={l.id}>
-                                    {l.location_code}
+                                    {l.location_name}
                                   </option>
                                 ))}
                             </select>
