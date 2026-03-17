@@ -34,7 +34,6 @@ const REASONS: { label: string; value: string }[] = [
 const ON_HAND_TABLE = "inventory_on_hand_test";
 const ADJUST_RPC = "adjust_inventory_test";
 
-const LOCATIONS_TABLE = "locations_test";
 const LOC_ON_HAND_TABLE = "inventory_availability_view";
 // const MOVE_RPC = "move_inventory_test";
 const MOVEMENTS_TABLE = "inventory_movements_test"; // optional if you want to show recent moves
