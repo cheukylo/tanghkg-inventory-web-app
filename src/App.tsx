@@ -11,28 +11,29 @@ type ScanViewResult = {
 
 type Mode = "home" | "scan" | "inventory";
 
-type Adjustment = {
+
+type AuditEntry = {
   id: number;
   delta: number;
   reason: string | null;
   note: string | null;
   created_at: string;
+  location_id?: string | null;
 };
 
 const TABLE = "products_catalog";
 const BUCKET = "product-images";
-const ADJUSTMENTS_TABLE = "inventory_adjustments_test";
 const REASONS: { label: string; value: string }[] = [
   { label: "Monthly Cycle Count", value: "monthly_cycle_count" },
   { label: "Initial Count", value: "initial_count" },
-  { label: "Sale", value: "sale" },
   { label: "Damage", value: "damage" },
 ];
 
 
-// Your sandbox inventory table + RPC
+// Sandbox inventory table + RPC
 const ON_HAND_TABLE = "inventory_on_hand_test";
-const ADJUST_RPC = "adjust_inventory_test";
+const AUDIT_RPC = "audit_inventory_by_location_test";
+
 
 const LOC_ON_HAND_TABLE = "inventory_availability_view";
 // const MOVE_RPC = "move_inventory_test";
@@ -90,7 +91,7 @@ export default function App() {
   const [invProductCode, setInvProductCode] = useState<string | null>(null);
   const [invOnHand, setInvOnHand] = useState<number | null>(null);
   const [invLoading, setInvLoading] = useState(false);
-  const [invAdjustments, setInvAdjustments] = useState<Adjustment[]>([]);
+  const [invAudits, setInvAudits] = useState<AuditEntry[]>([]);
   const [invEntry, setInvEntry] = useState<"scan" | "search">("search");
 
 
@@ -105,8 +106,6 @@ export default function App() {
   const [invSearchError, setInvSearchError] = useState<string | null>(null);
   const [invSearchBusy, setInvSearchBusy] = useState(false);
   const invReqRef = useRef(0);
-
-  // const [invAction, setInvAction] = useState("adjust"); // "adjust" | "move"
 
   // Batch Mode 
   const invScanBusyRef = useRef(false);
@@ -150,7 +149,7 @@ export default function App() {
   };
 
   // New tabs within inventory mode 2-26-2026
-  type InvStep = "menu" | "receive" | "send" | "transfer" | "adjust";
+  type InvStep = "menu" | "receive" | "send" | "transfer" | "audit";
   const [invStep, setInvStep] = useState<InvStep>("menu");
 
   const [adjustLoc, setAdjustLoc] = useState("");
@@ -436,6 +435,7 @@ export default function App() {
 
   type Movement = {
     id: number;
+    movement_type: string;
     quantity: number;
     note: string | null;
     created_at: string;
@@ -444,6 +444,7 @@ export default function App() {
     from_location?: { location_code: string }[] | null;
     to_location?: { location_code: string }[] | null;
   };
+
   const [invMoves, setInvMoves] = useState<Movement[]>([]);
 
 
@@ -602,7 +603,6 @@ export default function App() {
 
         // Reuse the exact same flow as QR scan (loads on-hand, image, last 3, etc.)
         await handleInventoryModeScan(productCode);
-        await loadRecentMoves(productCode);
       } finally {
         setInvSearchBusy(false);
       }
@@ -718,7 +718,7 @@ export default function App() {
     setInvSuccess(null);
     setInvImageUrl(null);
 
-    setInvAdjustments([]);
+    setInvAudits([]);
 
     setInvSearchCode("");
     setInvSearchError(null);
@@ -880,7 +880,7 @@ export default function App() {
     setInvLoading(true);
     setInvOnHand(null);
     setInvImageUrl(null);
-    setInvAdjustments([]);
+    setInvAudits([]);
 
     if (batchMode) {
       addToCart(code);
@@ -946,29 +946,13 @@ export default function App() {
       return false;
     }
     // 4) Load last 3 adjustments
-    const { data: adjRows, error: adjErr } = await supabase
-      .from(ADJUSTMENTS_TABLE)
-      .select("id,delta,reason,note,created_at")
-      .eq("product_code", productCode)
-      .order("created_at", { ascending: false })
-      .limit(3);
+    setInvOnHand(invRow?.on_hand ?? 0);
 
-    if (reqId !== invReqRef.current) return false;
-
-    if (adjErr) {
-      setScanError(`Adjustment history failed: ${adjErr.message}`);
-      setInvAdjustments([]);
-    } else {
-      setInvAdjustments((adjRows ?? []) as Adjustment[]);
-    }
-
+    await loadRecentAudits(productCode);
     await loadRecentMoves(productCode);
 
-    if (reqId !== invReqRef.current) return false;
-
-    setInvOnHand(invRow?.on_hand ?? 0);
     setInvLoading(false);
-    return true
+    return true;
   };
 
   // Manual/Camera Cards
@@ -1045,51 +1029,41 @@ export default function App() {
     return invOnHand + invDelta;
   }, [invOnHand, invDelta]);
 
-  const canSubmit =
-    !!invProductCode && invOnHand != null && invDelta !== 0 && !invLoading;
+  const canSubmitAudit =
+    !!invProductCode &&
+    !!adjustLoc &&
+    !!invReason &&
+    invOnHand != null &&
+    invDelta !== 0 &&
+    !invLoading;
 
-  const submitAdjustment = async () => {
+  const submitAudit = async () => {
     setInvError(null);
     setInvSuccess(null);
 
-    if (!canSubmit || !invProductCode) return;
+    if (!canSubmitAudit || !invProductCode) return;
 
-    const { error } = await supabase.rpc(ADJUST_RPC, {
+    const { error } = await supabase.rpc(AUDIT_RPC, {
       p_product_code: invProductCode,
+      p_location_id: adjustLoc,
       p_delta: invDelta,
       p_reason: invReason || null,
       p_note: invNote || null,
     });
 
     if (error) {
-      setInvError(`Adjustment failed: ${error.message}`);
+      setInvError(`Audit failed: ${error.message}`);
       return;
     }
 
-    // Refresh on-hand after submit
-    const { data: invRow, error: invErr } = await supabase
-      .from(ON_HAND_TABLE)
-      .select("on_hand")
-      .eq("product_code", invProductCode)
-      .maybeSingle();
+    await refreshOnHandGlobal(invProductCode);
+    await refreshLocBalances(invProductCode);
+    await loadRecentAudits(invProductCode);
+    await loadRecentMoves(invProductCode);
 
-    if (invErr) {
-      setInvError(`Adjustment saved, but refresh failed: ${invErr.message}`);
-      return;
-    }
-
-    setInvOnHand(invRow?.on_hand ?? 0);
     setInvDelta(0);
-    setInvSuccess("Inventory updated.");
+    setInvSuccess("Audit recorded.");
 
-    const { data: adjRows, error: adjErr } = await supabase
-      .from(ADJUSTMENTS_TABLE)
-      .select("id,delta,reason,note,created_at")
-      .eq("product_code", invProductCode)
-      .order("created_at", { ascending: false })
-      .limit(3);
-
-    if (!adjErr) setInvAdjustments((adjRows ?? []) as Adjustment[]);
   };
 
   // Summary Helper
@@ -1100,7 +1074,7 @@ export default function App() {
       ? "Send"
       : invStep === "transfer"
       ? "Transfer"
-      : "Adjust";
+      : "Cart";
 
   const currentSubmitLabel =
     invStep === "receive"
@@ -1118,7 +1092,7 @@ export default function App() {
       : t("confirm_change");
 
   const stickySummary =
-    batchMode && invStep !== "adjust"
+    batchMode && invStep !== "audit"
       ? `${cartLines.length} lines · ${cartTotalUnits} units`
       : invProductCode
       ? invProductCode
@@ -1138,7 +1112,7 @@ export default function App() {
       ? batchMode
         ? submitTransferBatch
         : submitMove
-      : submitAdjustment;
+      : submitAudit;
 
   // Disabled-state Selector
   const stickySubmitDisabled =
@@ -1154,7 +1128,7 @@ export default function App() {
       ? batchMode
         ? !fromLoc || !toLoc || fromLoc === toLoc || cartLines.length === 0 || invSubmitting
         : !fromLoc || !toLoc || fromLoc === toLoc || moveQty < 1 || invSubmitting
-      : !canSubmit || invSubmitting;
+      : !canSubmitAudit || invSubmitting;
 
   // Sticky Secondary Summary
   const stickySecondarySummary =
@@ -1181,6 +1155,7 @@ export default function App() {
         quantity,
         note,
         created_at,
+        movement_type,
         from_location_id,
         to_location_id,
         from_location:locations_test!inventory_movements_test_from_location_id_fkey(location_code),
@@ -1199,6 +1174,7 @@ export default function App() {
     setInvMoves(
       (data ?? []).map((row) => ({
         id: row.id,
+        movement_type: row.movement_type,
         quantity: row.quantity,
         note: row.note,
         created_at: row.created_at,
@@ -1210,6 +1186,33 @@ export default function App() {
     );
   };
 
+  // Load recent audits
+  const loadRecentAudits = async (productCode: string) => {
+    const { data, error } = await supabase
+      .from(MOVEMENTS_TABLE)
+      .select("id, quantity, reason, note, created_at, location_id")
+      .eq("product_code", productCode)
+      .eq("movement_type", "audit")
+      .order("created_at", { ascending: false })
+      .limit(3);
+
+    if (error) {
+      console.error("audit history failed:", error);
+      setInvAudits([]);
+      return;
+    }
+
+    setInvAudits(
+      (data ?? []).map((row: any) => ({
+        id: row.id,
+        delta: Number(row.quantity ?? 0),
+        reason: row.reason ?? null,
+        note: row.note ?? null,
+        created_at: row.created_at,
+        location_id: row.location_id ?? null,
+      }))
+    );
+  };
 
 
   // ---------- Render ----------
@@ -1509,7 +1512,7 @@ export default function App() {
                   type="button"
                   className={btnSecondary}
                   onClick={() => {
-                    setInvStep("adjust");
+                    setInvStep("audit");
                     setInvError(null);
                     setInvSuccess(null);
                     setBatchMode(false); // force off for adjust
@@ -1517,7 +1520,7 @@ export default function App() {
                     setInvProductCode(null);
                   }}
                 >
-                  Adjust
+                  Audit
                 </button>
               </div>
             )}
@@ -1543,10 +1546,10 @@ export default function App() {
                           {invStep === "receive" && "Receive"}
                           {invStep === "send" && "Send"}
                           {invStep === "transfer" && "Transfer"}
-                          {invStep === "adjust" && "Adjust"}
+                          {invStep === "audit" && "Audit"}
                         </div>
                         <div className={`text-xs ${textMuted}`}>
-                          {invStep === "adjust" && "Adjust on-hand at a location (damage, recount, corrections)."}
+                          {invStep === "audit" && "Audit on-hand at a location (damage, recount, corrections)."}
                           {invStep === "receive" && "Receive stock into a location (adds on-hand)."}
                           {invStep === "send" && "Send stock out from a location (removes on-hand)."}
                           {invStep === "transfer" && "Move stock between locations (total on-hand stays the same)."}
@@ -1565,7 +1568,7 @@ export default function App() {
                           setInvProductCode(null);
                           setInvImageUrl(null);
                           setInvOnHand(null);
-                          setInvAdjustments([]);
+                          setInvAudits([]);
                           setInvMoves([]);
                           setInvStep("menu");
                         }}
@@ -1669,7 +1672,7 @@ export default function App() {
                       </div>
                     </div>
                     {/* Batch Mode */}
-                    {invStep !== "adjust" && batchMode && (
+                    {invStep !== "audit" && batchMode && (
                       <div className="rounded-xl border border-[#E8D9D9] bg-white p-3">
                         <div className="flex items-center justify-between">
                           <button
@@ -1753,7 +1756,7 @@ export default function App() {
                       </div>
                     )}
 
-                    {invStep !== "adjust" && (
+                    {invStep !== "audit" && (
                       <div className="flex items-center justify-between">
                         <div className={`text-xs ${textMuted}`}>
                           {batchMode ? "Batch mode ON: scans add to cart" : "Batch mode OFF: scans load one item"}
@@ -1772,7 +1775,7 @@ export default function App() {
                       </div>
                     )}
 
-                    {invStep === "adjust" && (
+                    {invStep === "audit" && (
                       <>
                         {/* Where it is*/}
                         <div className="rounded-xl border border-[#E8D9D9] bg-white p-3">
@@ -1817,14 +1820,14 @@ export default function App() {
                         {/* Last 3 adjustments */}
                         <div className="rounded-xl border border-[#E8D9D9] bg-white p-3">
                           <div className="text-sm font-semibold text-[#111111]">
-                            Recent adjustments
+                            Recent audits
                           </div>
 
-                          {invAdjustments.length === 0 ? (
-                            <div className="text-sm text-[#5B4B4B] mt-1">No adjustments yet.</div>
+                          {invAudits.length === 0 ? (
+                            <div className="text-sm text-[#5B4B4B] mt-1">No audits yet.</div>
                           ) : (
                             <div className="mt-2 space-y-2">
-                              {invAdjustments.map((a) => {
+                              {invAudits.map((a) => {
                                 const isAdd = a.delta >= 0;
                                 const deltaText = isAdd ? `+${a.delta}` : `${a.delta}`;
                                 const deltaClass = isAdd ? "text-[#15803D]" : "text-[#B91C1C]";
@@ -1914,7 +1917,7 @@ export default function App() {
                         </div>
 
                         {/* Submit */}
-                        <button className={btnBlue} onClick={submitAdjustment} disabled={!canSubmit}>
+                        <button className={btnBlue} onClick={submitAudit} disabled={!canSubmitAudit}>
                           {t("confirm_change")}
                         </button>
                       </>
@@ -2197,7 +2200,7 @@ export default function App() {
               </div>
             )}
             {/* Sticky bottom */}
-            {invStep !== "adjust" && (
+            {invStep !== "audit" && (
               <div className="fixed bottom-0 left-0 right-0 z-40 border-t border-[#E8D9D9] bg-[#FBF7F6]/95 backdrop-blur">
                 <div className="max-w-md mx-auto p-3">
                   <div className="rounded-2xl border border-[#E0CACA] bg-white shadow-sm px-3 py-3 flex items-center gap-3">
